@@ -40,7 +40,7 @@ begin
     donottrace:=tstringlist.create;
 
     try
-      donottrace.LoadFromFile(s);
+      donottrace.LoadFromFile(s{$if FPC_FULLVERSION>=030200}, true{$endif});
 
       i:=0;
       while i<donottrace.Count do

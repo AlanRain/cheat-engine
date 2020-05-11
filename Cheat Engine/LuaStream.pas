@@ -11,7 +11,7 @@ procedure stream_addMetaData(L: PLua_state; metatable: integer; userdata: intege
 
 implementation
 
-uses LuaClass, LuaHandler, LuaObject;
+uses LuaClass, LuaHandler, LuaObject{$ifdef darwin},mactypes{$endif};
 
 function stream_getSize(L: PLua_State): integer; cdecl;
 var
@@ -182,6 +182,24 @@ begin
   result:=0;
 end;
 
+function stream_readAnsiString(L: PLua_State): integer; cdecl;
+var
+  stream: Tstream;
+begin
+  stream:=luaclass_getClassObject(L);
+  lua_pushstring(L,stream.ReadAnsiString);
+  result:=1;
+end;
+
+function stream_writeAnsiString(L: PLua_State): integer; cdecl;
+var
+  stream: Tstream;
+begin
+  stream:=luaclass_getClassObject(L);
+  stream.WriteAnsiString(Lua_ToString(L,1));
+  result:=0;
+end;
+
 function stream_write(L: PLua_State): integer; cdecl;
 var
   stream: Tstream;
@@ -198,7 +216,11 @@ begin
     if lua_istable(L, 1) then
     begin
       if lua_gettop(L)>=2 then
+      {$if FPC_FULLVERSION < 030200}
+        count:=min(int64(lua_objlen(L, 1)), int64(lua_tointeger(L, 2)))
+      {$else}
         count:=min(lua_objlen(L, 1), lua_tointeger(L, 2)) //prevent the length from exeeding the table
+      {$endif}
       else
         count:=lua_objlen(L, 1);
 
@@ -235,6 +257,8 @@ begin
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'writeDword', stream_writeDword);
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'readQword', stream_readQword);
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'writeQword', stream_writeQword);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'readAnsiString', stream_readAnsiString);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'writeAnsiString', stream_writeAnsiString);
 
   luaclass_addPropertyToTable(L, metatable, userdata, 'Size', stream_getSize, stream_setSize);
   luaclass_addPropertyToTable(L, metatable, userdata, 'Position', stream_getPosition, stream_setPosition);
@@ -268,11 +292,55 @@ begin
   result:=0;
 end;
 
+function memorystream_loadFromFileNoError(L: PLua_State): integer; cdecl;
+var
+  ms: Tmemorystream;
+  r: boolean=false;
+begin
+  ms:=luaclass_getClassObject(L);
+  if lua_gettop(L)>=1 then
+  try
+    ms.LoadFromFile(Lua_ToString(L,1));
+    lua_pushboolean(L,true);
+    result:=1;
+  except
+    on e:exception do
+    begin
+      lua_pushboolean(L,false);
+      lua_pushstring(L,e.message);
+      result:=2;
+    end;
+  end;
+end;
+
+function memorystream_saveToFileNoError(L: PLua_State): integer; cdecl;
+var ms: Tmemorystream;
+begin
+  ms:=luaclass_getClassObject(L);
+  if lua_gettop(L)>=1 then
+  try
+    ms.SaveToFile(Lua_ToString(L,1));
+    lua_pushboolean(L,true);
+    result:=1;
+  except
+    on e:exception do
+    begin
+      lua_pushboolean(L,false);
+      lua_pushstring(L,e.message);
+      result:=2;
+    end;
+  end;
+
+  result:=0;
+end;
+
 procedure memorystream_addMetaData(L: PLua_state; metatable: integer; userdata: integer );
 begin
   stream_addMetaData(L, metatable, userdata);
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'loadFromFile', memorystream_loadFromFile);
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'saveToFile', memorystream_saveToFile);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'loadFromFileNoError', memorystream_loadFromFileNoError);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'saveToFileNoError', memorystream_saveToFileNoError);
   luaclass_addPropertyToTable(L, metatable, userdata, 'Memory', memorystream_getMemory, nil);
 end;
 

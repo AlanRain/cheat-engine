@@ -5,8 +5,14 @@ unit formmemoryregionsunit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls,CEFuncProc, ComCtrls, Menus,opensave,NewKernelHandler, LResources;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls,CEFuncProc, ComCtrls, Menus,OpenSave,NewKernelHandler, LResources;
 
 type tmoreinfo = record
   address: ptrUint;
@@ -20,6 +26,7 @@ type
 
   TFormMemoryRegions = class(TForm)
     Button1: TButton;
+    mrImageList: TImageList;
     ListView1: TListView;
     PopupMenu1: TPopupMenu;
     Saveselectedregions1: TMenuItem;
@@ -68,6 +75,7 @@ resourcestring
   rsNoAccess = 'No Access';
   rsGuard = 'Guard';
   rsNoCache = 'No Cache';
+  rsWriteCombine = 'Write Combine';
   rsCommit = 'Commit';
   rsFree = 'Free';
   rsReserve = 'Reserve';
@@ -92,12 +100,14 @@ var address: PtrUInt;
 
     kernelmode: boolean=false;
 begin
+  {$ifdef windows}
   if DBKLoaded then
   begin
     kernelmode:=ssCtrl in GetKeyShiftState;
     if not kernelmode then
       statusbar1.Visible:=true;
   end;
+  {$endif}
 
 
    listview1.Clear;
@@ -127,6 +137,7 @@ begin
       if (PAGE_NOACCESS and mbi.AllocationProtect)=PAGE_NOACCESS then temp:=rsNoAccess;
       if (PAGE_GUARD and mbi.AllocationProtect)=PAGE_GUARD then temp:=temp+'+'+rsGuard;
       if (PAGE_NOCACHE	and mbi.AllocationProtect)=PAGE_NOCACHE then temp:=temp+'+'+rsNoCache;
+      if (PAGE_WRITECOMBINE and mbi.AllocationProtect)=PAGE_WRITECOMBINE then temp:=temp+'+'+rsWriteCombine;
       listview1.Items[listview1.Items.Count-1].SubItems.add(temp);
 
       case mbi.State of
@@ -264,6 +275,7 @@ var res: word;
     copyonwrite: boolean;
     i: integer;
 begin
+  {$ifdef windows}
   res:=MessageDlg(rsDoYouWantToUseTheCOPYONWRITEBit, mtConfirmation, [mbyes, mbno, mbcancel], 0);
   if res=mrcancel then exit;
   if res=mrNo then copyonwrite:=false else copyonwrite:=true;
@@ -275,6 +287,7 @@ begin
       MakeWritable(moreinfo[i].address,moreinfo[i].size,copyonwrite);
     end;
 
+  {$endif}
 end;
 
 procedure TFormMemoryRegions.ListView1DblClick(Sender: TObject);
@@ -287,20 +300,26 @@ end;
 
 procedure TFormMemoryRegions.PopupMenu1Popup(Sender: TObject);
 begin
-  setselectedregionstobewritable1.enabled:=DBKLoaded;
+
+
+  setselectedregionstobewritable1.enabled:={$ifdef windows}DBKLoaded{$else}false{$endif};
 
 end;
 
 procedure LoadPsApi;
 var psapi: THandle;
 begin
+  {$ifdef windows}
   psapi:=LoadLibrary('psapi.dll');
 
   GetMappedFileName:=GetProcAddress(psapi,'GetMappedFileNameA');
+  {$endif}
 end;
 
 initialization
   {$i formmemoryregionsunit.lrs}
+  {$ifdef windows}
   LoadPsApi;
+  {$endif}
 
 end.

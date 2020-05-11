@@ -1,15 +1,20 @@
 List of CE specific functions and variables:
 
+Global Variables:
 TrainerOrigin : A variable that contains the path of the trainer that launched cheat engine (Only set when launched as a trainer)
 process : A variable that contains the main modulename of the currently opened process
 MainForm: The main ce gui
 AddressList: The address list of the main ce gui
 
+
+Global Functions:
 getCEVersion(): Returns a floating point value specifying the version of cheat engine
 getCheatEngineFileVersion(): Returns the full version data of the cheat engine version. A raw integer, and a table containing major, minor, release and build
 
 
-activateProtection(): Prevents basic memory scanners from opening the cheat engine process
+getOperatingSystem(): Returns 0 for Windows, 1 for Mac
+
+activateProtection(): Prevents basic memory scanners from opening the cheat engine process (Not that useful)
 enableDRM(altitude OPTIONAL, secondaryprocessid OPTIONAL ) : Prevents normal memory scanners from reading the Cheat Engine process (kernelmode)  The secondaryprocessid lets you protect another process. E.g the game itself, so they can't easily see what you change 
 
 fullAccess(address,size): Changes the protection of a block of memory to writable and executable
@@ -32,6 +37,13 @@ copyMemory(sourceAddress: integer, size: integer, destinationAddress:integer SEM
 
   Returns the address of the copy on success, nil on failure
   
+compareMemory(address1: integer; address2: integer; size: integer;  method: integer)
+  Compares the memory and returns true if the same or false and and index where the first disparity is
+
+  Method can be:
+  0: Target to Target
+  1: Address1=Target Address2=CE
+  2: Address1=CE Address2=CE
 
 readBytes(address,bytecount, ReturnAsTable ) : returns the bytes at the given address. If ReturnAsTable is true it will return a table instead of multiple bytes
   Reads the bytes at the given address and returns a table containing the read out bytes
@@ -81,6 +93,7 @@ dwordToByteTable(number): {}         - Converts a dword to a bytetable
 qwordToByteTable(number): {}         - Converts a qword to a bytetable
 floatToByteTable(number): {}         - Converts a float to a bytetable
 doubleToByteTable(number): {}        - Converts a double to a bytetable
+extendedToByteTable(number): {}      - Converts an extended to a bytetable
 stringToByteTable(string): {}        - Converts a string to a bytetable
 wideStringToByteTable(string): {}    - Converts a string to a widestring and converts that to a bytetable
 
@@ -89,8 +102,9 @@ byteTableToDword(table): number      - Converts a bytetable to a dword
 byteTableToQword(table): number      - Converts a bytetable to a qword
 byteTableToFloat(table): number      - Converts a bytetable to a float
 byteTableToDouble(table): number     - Converts a bytetable to a double
+byteTableToExtended(table): number   - Converts a bytetable to an extended and converts that to a double
 byteTableToString(table): string     - Converts a bytetable to a string
-byteTableToWideString(table): string - Converts a bytetable to a widestring and convets that to a string
+byteTableToWideString(table): string - Converts a bytetable to a widestring and converts that to a string
 
 bOr(int1, int2)   : Binary Or
 bXor(int1, int2)  : Binary Xor
@@ -99,6 +113,7 @@ bShl(int, int2)   : Binary shift left
 bShr(int, int2)   : Binary shift right
 bNot(int)         : Binary not
 
+enumMemoryRegions() : Returns an indexed table containing the memorylayout. Each entry consists out of: BaseAddress, AllocationBase, AllocationProtect, RegionSize, State, Protect, Type
 
 writeRegionToFile(filename, sourceaddress,size) : Writes the given region to a file. Returns the number of bytes written
 readRegionFromFile(filename, destinationaddress)
@@ -110,7 +125,9 @@ getRef(integer): ... - Returns whatever the reference points out
 destroyRef(integer) - Removes the reference
 
 encodeFunction(function): string - Converts a given function into an encoded string that you can pass on to decodeFunction
-decodeFunction(string): function - Converts an encoded string back into a function.  Note that the string must be made on the same architecture as it is currently running. 32-bit can onyl load 32-bit, 64-bit can only load 64-bit.  So either have two scripts ready, or limit to only one architecture. (Like .EXE trainers)
+decodeFunction(string): function - Converts an encoded string back into a function.  Note that the string must be made on the same architecture as it is currently running. 32-bit can only load 32-bit, 64-bit can only load 64-bit.  So either have two scripts ready, or limit to only one architecture. (Like .EXE trainers)
+
+encodeFunctionEx(string,pathtodll OPTIONAL) - See encodeFunction but uses a script instead of a function, and lets you specify which lua dll to use (Note: Still can't use 32-bit dll's in 64-bit and vice versa)
 
 
 getTranslationFolder(): Returns the path of the current translation files. Empty if there is no translation going on
@@ -138,20 +155,29 @@ getFileVersion(pathtofile): returns the 64-bit file version, and a table that ha
 getFileList(Path:string, searchMask:string OPTIONAL, SearchSubDirs: boolean OPTIONAL, DirAttrib: integer OPTIONAL): Returns an indexed table with filenames
 getDirectoryList(Path:string, SearchSubDirs: boolean OPTIONAL): Returns an indexed table with directory names
 
-
+enableWindowsSymbols(): Will download the PDB files of Windows and load them (Takes a long time the first time)
 getAddress(string, local OPTIONAL): returns the address of a symbol. Can be a modulename or an export. set Local to true if you wish to querry the symboltable of the ce process
-getAddressSafe(string, local OPTIONAL): returns the address of a symbol, or nil if not found. Similar to getAddress when errorOnLookup is false, but returns nil instead
+enableKernelSymbols(): Will check the option for kernelmode symbols in memory view (Gets only the exports unless enableWindowsSymbols() is used)
+getAddressSafe(string, local OPTIONAL, shallow OPTIONAL): returns the address of a symbol, or nil if not found. Similar to getAddress when errorOnLookup is false, but returns nil instead
 getSymbolInfo(symbolname): Returns a table as defined by the SymbolList class object (modulename, searchkey, address, size)
 getModuleSize(modulename): Returns the size of a given module (Use getAddress to get the base address)
+getRTTIClassName(address): Returns the classname of a given structure based on RTTI information (assuming it can be found, returns nil if not or unknown)
+
 reinitializeSymbolhandler(waittilldone: BOOLEAN OPTIONAL, default=TRUE): reinitializes the symbolhandler. E.g when new modules have been loaded
 reinitializeDotNetSymbolhandler(modulename OPTIONAL): Reinitializes only the DotNet part of the symbol list. (E.g After an ILCode has been JITed) (6.4+)
 reinitializeSelfSymbolhandler(waittilldone: BOOLEAN OPTIONAL, default=TRUE): reinitializes the selfsymbolhandler. E.g when new modules have been loaded to CE process
+waitForExports(): Waits till all DLL Exports are loaded 
+waitForDotNet(): Waits till all .NET symbols are loaded (this includes DLL Exports)
+waitForPDB(): Waits till all PDB symbols are loaded (this includes DLL Exports, and .NET)
+searchPDBWhileLoading(state: boolean): Will interrupt symbol enum to query the debughelp symbol handler about a specific symbol. This can take a while. Default is false
 
 errorOnLookupFailure(state): If set to true (default) address lookups in stringform will raise an error if it can not be looked up. This includes symbolnames that are not defined and pointers that are bad. If set to false it will return 0 in those cases
   (Useful for pointers that don't work 100% of the time)
 6.4+:Returns the original state
 
-generateAPIHookScript(address, addresstojumpto, addresstogetnewcalladdress OPT) : Generates an auto assembler script which will hook the given address when executed
+waitforsymbols(state): If set to true looking up a symbol will wait for the symbol to be loaded(default true)
+
+generateAPIHookScript(address:string, addresstojumpto:string, addresstogetnewcalladdress:string OPT, ext:string OPT, targetself:boolean OPT) : Generates an auto assembler script which will hook the given address when executed
 autoAssemble(text, targetself OPTIONAL, disableInfo OPTIONAL) : runs the auto assembler with the given text. Returns true on success, with as secondary a table you can use when disabling (if targetself is set it will assemble into Cheat Engine itself). If disableInfo is provided the [Disable] section will be handled
 autoAssemble(text, disableInfo OPTIONAL)
 
@@ -256,7 +282,7 @@ registerAutoAssemblerPrologue(function(script, syntaxcheck), postAOB:boolean=fal
 
 unregisterAutoAssemblerPrologue(ID)
 
-registerAutoAssemblerTemplate(name, function(script: TStrings; sender: TFrmAutoInject): id - Registers an template for the auto assembler. The script parameter is a TStrings object that has a direct connection to the current script. (All script parsing is up to you...).  Returns an ID
+registerAutoAssemblerTemplate(name, function(script: TStrings; sender: TFrmAutoInject), shortcut OPTIONAL ): id - Registers an template for the auto assembler. The script parameter is a TStrings object that has a direct connection to the current script. (All script parsing is up to you...).  Returns an ID
 unregisterAutoAssemblerTemplate(ID)
 
 
@@ -284,6 +310,10 @@ getHandleList(filter OPTIONAL): returns a table with all the handles in the syst
 
 closeRemoteHandle(handle, processid OPTIONAL): Closes the handle of a process.
 
+duplicateHandle(handle): Duplicates the provided CE based handle into the target process (You still need tell the target about this handle, like an injected dll data block)
+duplicateHandle(handle, Mode (0/1) ): If mode is 0 then it's the same as just duplicateHandle(handle), but if it's 1 it duplicates the target process handle into CE's process
+duplicateHandle(handle, fromPID, toPID): Copies the handle from the given process to the target process. 
+
 
 function onOpenProcess(processid):
   If this function is defined it will be called whenever cheat engine opens a process.
@@ -293,11 +323,16 @@ function onOpenProcess(processid):
 
 MainForm.OnProcessOpened: function(processid, processhandle, caption) - Define this if you want to be notified when a new process has been opened. Called only once from the main thread. It is recommended to use this instead of onOpenProcess
 
+function onTableLoad(before): If defined this function will be called twice when a table gets loaded. Once before the loading, and once after.
+
+
+
 getOpenedProcessID() : Returns the currently opened process. If none is open, returns 0
+getOpenedProcessHandle(): Returns the handle of the currently opened process
 getProcessIDFromProcessName(name) : returns a processid
 openProcess(processid) : causes cheat engine to open the given processid
 openProcess(processname): causes cheat engine to find and open the given process
-openFileAsProcess(filename,is64bit): causes cheat engine to open the file with memory access as if it's a process
+openFileAsProcess(filename,is64bit OPTIONAL,startaddress OPTIONAL): causes cheat engine to open the file with memory access as if it's a process
 saveOpenedFile(filename OPTIONAL): Saves the changes of the opened file, set filename if you want a different file
 setPointerSize(size): Sets the size cheat engine will deal with pointers in bytes. (Some 64-bit processes can only use 32-bit addresses)
 setAssemblerMode(int): 0=32-bit, 1=64-bit
@@ -315,6 +350,7 @@ gc_setActive(state: boolean, interval: integer, minsize: integer): enables/disab
 getSystemMetrics(index): Retrieves the specified system metric or system configuration setting
 (https://msdn.microsoft.com/en-us/library/windows/desktop/ms724385.aspx)
 
+getScreenDPI(): Returns the Dots/Pixels Per Inch of the screen
 getScreenHeight(): Returns the screen height
 getScreenWidth(): Returns the screen  width
 
@@ -353,7 +389,7 @@ userDataToInteger(UserDataVar):  Converts a given userdata variable to an intege
 
 synchronize(function(...), ...): Calls the given function from the main thread. Returns the return value of the given function
 queue(function(...),...): calls the given function from the main thread. Does not wait for the result. Note: Be sure to synchronize and call checkSynchronize() before freeing the calling thread
-checkSynchronize(): Call this from an infinite loop in the main thread when using threading and synchronize calls. This will execute any queued synchronize calls
+checkSynchronize(timeout OPTIONAL): Call this from an infinite loop in the main thread when using threading and synchronize calls. This will execute any queued synchronize calls
 
 writeToClipboard(text):  Writes the given text to the clipboard
 readFromClipboard():  Reads the text from the clipboard
@@ -367,9 +403,8 @@ injectDLL(filename): Injects a dll, and returns true on success
 executeCode(address, parameter OPTIONAL, timeout OPTIONAL) : address - Executes a stdcall function with 1 parameter at the given address in the target process  and wait for it to return. The return value is the result of the function that was called
 executeCodeLocal(addres, parameter OPTIONAL): address -  Executes a stdcall function with 1 parameter at the given address in the target process. The return value is the result of the function that was called
 
-executeCodeEx(callmethod, timeout, address, {type,value},{type,value},...)
-  Calls a function using the given callmethod and parameters
-  callmethod: 0=stdcall, 1=cdecl
+executeCodeEx(callmethod, timeout, address, {type=x,value=param1} or param1,{type=x,value=param2} or param2,...)
+callmethod: 0=stdcall, 1=cdecl
   timeout: Number of milliseconds to wait for a result. nil or -1, infitely. 0 is no wait (will not free the call memory, so beware of it's memory leak)
   address: Address to execute
   {type,value} : Table containing the value type, and the value
@@ -382,8 +417,40 @@ executeCodeEx(callmethod, timeout, address, {type,value},{type,value},...)
      
     value: anything base type that lua can interpret
     }
+  if just param is provided CE will guess the type based on the provided type
 
-   Returns the E/RAX value returned by the called function (if no timeout or other interruption)
+executeMethod(callmethod, timeout, address, {regnr=0..15,classinstance=xxxxxxxx} or classinstance, {type=x,value=param1} or param1, {type=x,value=param2} or param2,...) - Executes a method.
+  regnr can be:
+    0: R/EAX
+    1: R/ECX
+    2: R/EDX
+    3: R/EBX
+    4: R/ESP
+    5: R/EBP
+    6: R/ESI
+    7: R/EDI
+    8: R8
+    9: R9
+    10: R10
+    11: R11
+    12: R12
+    13: R13
+    14: R14
+    15: R15
+  
+
+  If no register number is provided then ECX(1) is picked
+  If instance is nil it is the same as executeCodeEx
+
+executeCodeLocalEx(address, {type=x,value=param1} or param1,{type=x,value=param2} or param2,...)
+  Calls a function using the given callmethod and parameters
+  
+  
+  If a direct parameter is given instead of a table entry describing the type, CE will 'guess' the type it is
+
+  Returns the E/RAX value returned by the called function (if no timeout or other interruption)
+
+
 
 
 
@@ -413,6 +480,7 @@ AOBScan(x,x,x,x,...):
 scans the currently opened process and returns a StringList object containing all the results. don't forget to free this list when done
 Bytevalue of higher than 255 or anything not an integer will be seen as a wildcard
 AOBScan(aobstring): see above but here you just input one string
+AOBScanUnique(aobstring)- Integer: scans for the aobstring and returns the first result it finds and nil if nothing is found. Make sure it is unique as it will return the first result found as it will return any random match
 
 
 
@@ -425,8 +493,9 @@ allocateMemory(size, BaseAddress OPTIONAL, Protection OPTIONAL): Allocates some 
 deAlloc(address, size OPTIONAL): Frees allocated memory
 
 allocateSharedMemory(name, size):
-  Creates a shared memory object of the given size if it doesn't exist yet. If size is not given and there is no shared region with this name then the default size of 4096 is used
+  Creates a shared memory object in the attached process of the given size if it doesn't exist yet. If size is not given and there is no shared region with this name then the default size of 4096 is used
   It then maps this shared memory block into the currently targeted process. It returns the address of mapped region in the target process
+allocateSharedMemoryLocal(name, size): Same as allocateSharedMemory but then for the Cheat Engine process itself
 
 
 createSection(size) : Creates a 'section' in memory
@@ -456,6 +525,8 @@ targetIs64Bit(): Returns true if the target process is 64-bit, false if 32-bit
 
 getCheatEngineDir(): Returns the folder Cheat Engine is located at
 getCheatEngineProcessID(): Returns the processid of cheat engine
+
+getAutorunPath() : Returns the autorun path
 
 disassemble(address): Disassembles the given address and returns a string in the format of "address - bytes - opcode : extra"
 splitDisassembledString(disassembledstring): Returns 4 strings. The address, bytes, opcode and extra field
@@ -495,6 +566,8 @@ getApplication() : Returns the application object. (the titlebar)
 getAddressList() : Returns the cheat table addresslist object
 getFreezeTimer() : Returns the freeze timer object
 getUpdateTimer() : Returns the update timer object
+
+
 
 setGlobalKeyPollInterval(integer): Sets the global keypoll interval. The interval determines the speed of how often CE checks if a key has been pressed or not. Lower is more accurate, but eats more cpu power
 setGlobalDelayBetweenHotkeyActivation(integer): Sets the minimum delay between the activation of the same hotey in milliseconds. Affects all hotkeys that do not set their own minimum delay
@@ -720,8 +793,8 @@ properties:
   Parent: WinControl - The owner of this control
   PopupMenu: PopupMenu - The popup menu that shows when rightclicking the control
   Font: Font - The font class associated with the control
-  OnClick: function - The function to call when a button is pressed
-
+  OnClick: function(sender) - The function to call when a button is pressed
+  OnChangeBounds:function(sender) - Called when the size or position of the control changes
 
 methods:
   getLeft()
@@ -830,6 +903,7 @@ methods
   add(menuitem) : Adds a menuItem as a submenu item
   insert(index, menuitem): Adds a menuItem as a submenu item at the given index
   delete(index)
+  clear() - Deletes all children under this menuitem (frees the menu item, so it's gone)
   setOnClick(function) : Sets an onClick event
   getOnClick()
   doClick(): Executes the onClick method if one is assigned
@@ -870,7 +944,7 @@ methods
 
   getCount(): Returns the number is strings in the list
   remove(string); Removes the given string from the list
-  loadFromFile(filename) : Load the strings from a textfile
+  loadFromFile(filename, ignoreencoding OPTIONAL default true) : Load the strings from a textfile. If ignoreEncoding is false then the file will be loaded with the best encoding the loader can guess
   saveToFile(filename) : Save the strings to a textfile
 
   getString(index) : gets the string at the given index
@@ -878,7 +952,23 @@ methods
   beginUpdate() : Stops updates from triggering other events (prevents flashing)
   endUpdate(): call after beginUpdate
 
+ImageList Class: (Inheritance: )
+List containing images.  Used by several components for images
 
+createImageList(owner OPTIONAL): creates an imagelist object
+
+properties
+  Count: integer - Number of images in the list
+  DrawingStyle: 'dsFocus', 'dsSelected', 'dsNormal', 'dsTransparent'
+  Height: integer
+  Width: integer
+  Masked: boolean
+  Scaled: boolean
+  OnChange: function(sender)
+
+methods
+  add(bitmap, bitmapmask OPTIONAL):integer - Adds a new bitmap the list and returns the index of the newly added entry
+  draw(canvas, x,y, index) - Draws the image at the index to the specific x,y coordinates on the canvas
 
 Stringlist Class: (Inheritance : Strings->Object)
 createStringlist() : Creates a stringlist class object (for whatever reason, lua strings are probably easier to use)
@@ -936,6 +1026,14 @@ methods
   getBorderStyle()
 
   printToRasterImage(rasterimage): Draws the contents of the form to a rasterimage class object
+
+  registerCreateCallback(function(f)): userdata - Registers a function to be called when the form has finished being created
+  unregisterCreateCallback(userdata) - removes the specific callback
+  registerFirstShowCallback(function(f)): userdata - Registers a function to be called when the form is show the first time
+  unregisterFirstShowCallback(userdata) - removes the specific callback
+  registerCloseCallback(function(f)): userdata - Registers a function to be called when the form has been closed
+  unregisterCloseCallback(userdata) - removes the specific callback
+
   dragNow():  Call this on mousedown on any object if you wish that the mousemove will drag the whole form arround. Useful for borderless windows (Dragging will stop when the mouse button is released)
 
 
@@ -951,6 +1049,14 @@ methods
   setDoNotSaveInTable(boolean): Sets the DoNotSaveInTable property
   saveCurrentStateAsDesign() : Sets the current state of the form as the state that will be saved when the table is saved
 
+
+TfrmAutoInject class: (Inheritance: Form->ScrollingWinControl->CustomControl->WinControl->Control->Component->Object)
+createAutoAssemblerForm(script: string OPTIONAL): TFrmAutoInject - Spawns an autoassembler window with the optionally provided script
+
+properties
+  Assemblescreen: SynEdit - Editor for the script
+
+methods
 
 GraphicControl Class: (Inheritance: Control->Component->Object)
 properties
@@ -1020,9 +1126,11 @@ createEdit(owner): Creates an Edit class object which belongs to the given owner
 
 properties
   Text: string - The current contents of the editfield
-  SelText: string - The current selected contents of the edit field (readonly)
-  SelStart: number - The starting index of the current selection (zero-indexed, readonly)
-  SelLength: number - The length of the current selection. (readonly)
+  CaretPos: Point - The posaition of the caret
+  PasswordChar: string[1] - When not set to char0 this will make the edit field show the character instead of the given text
+  SelText: string - The current selected contents of the edit field 
+  SelStart: number - The starting index of the current selection (zero-indexed)
+  SelLength: number - The length of the current selection. 
   OnChange: function - The function to call when the editfield is changed
   OnKeyPress: function - The function to call for the KeyPress event.
   OnKeyUp: function - The function to call for the KeyUp event.
@@ -1084,8 +1192,31 @@ methods
     ssAutoBoth: " " " " ...
 
 
+SynEdit class: 
+createSynEdit(owner,mode OPTIONAL): Creates a synedit object. mode: 0=Lua highlighting, 1=Auto Assembler highlighting
+properties
+  Lines: Stringlist - Contains the text
+  Gutter: Gutter - Gutter object
+  ReadOnly: Boolean - Set to true for read only
+  SelStart: integer
+  SelEnd: integer
+  SelText: string
+  CanPaste: boolean
+  CanRedo: boolean
+  CanUndo: boolean
+  CharWidth: integer READONLY
+  LineHeight: integer READONLY
 
-
+methods
+  CopyToClipboard()
+  CutToClipboard()
+  PasteFromClipboard()
+  ClearUndo()
+  Redo()
+  Undo()
+  MarkTextAsSaved()
+  ClearSelection();
+  SelectAll();     
 
 ButtonControl Class: (Inheritance: WinControl->Control->Component->Object)
 
@@ -1307,6 +1438,7 @@ properties
   Selected: boolean - Returns true if selected
   Index: integer - The index in the Items object of the owner of this listitem (readonly)
   Owner: ListItems - The ListItems object that owns this ListItem (readonly)
+  Data: integer - Read/Write value up to the user to implement
 
 methods
   delete()
@@ -1316,6 +1448,8 @@ methods
   setChecked(boolean): Sets the checkbox of the listbox to the given state
   getSubItems(): Returns a Strings object
   makeVisible(partial): Scrolls the listview so this item becomes visible (Cheat Engine 6.4 and later)
+  displayRect(code): returns the displayed rectangle of the listitem. code can be: drBounds(0), drIcon(1), drLabel(2), drSelectBounds(3)
+  displayRectSubItem(code): returns the displayed rectangle of the listitem. code can be: drBounds(0), drIcon(1), drLabel(2), drSelectBounds(3)
 
 
 ListItems class : (Inheritance: TObject)
@@ -1328,8 +1462,6 @@ methods
   getCount()
   getItem(integer) : Return the listitem object at the given index
   add(): Returns a new ListItem object
-  displayRect(code): returns the displayed rectangle of the listitem. code can be: drBounds(0), drIcon(1), drLabel(2), drSelectBounds(3)
-  displayRectSubItem(code): returns the displayed rectangle of the listitem. code can be: drBounds(0), drIcon(1), drLabel(2), drSelectBounds(3)
 
 
 
@@ -1357,12 +1489,34 @@ properties
 methods
   clear()
   getColumns() : ListColumns - Returns a ListColumns object
+  getItemAt(x,y):ListItem - Returns the ListItem at the given index. nil if nothing
   getItems(): ListItems - Returns a ListItems object
   getItemIndex(): integer -  Returns the currently selected index in the Items object
   setItemIndex(index: integer)- Sets the current itemindex
   getCanvas() : Canvas - Returns the canvas object used to render the listview
   beginUpdate() - Tells the listview to stop updating while you're busy
   endUpdate() - Applies all updates between beginUpdate and endUpdate
+
+
+HeaderSection class : (Inheritance: CollectionItem)
+properties
+  Alignment: string - 'taLeftJustify', 'taRightJustify', 'taCenter'
+  ImageIndex: imageindex
+  MaxWidth: integer
+  MinWidth: integer
+  Text: String - The text of the headersection
+  Width: integer - The width of the headersection
+  Visible: boolean - Determines if the headersection is visible
+  OriginalIndex: integer - The original index ignoring user reorganization (READONLY)
+methods
+
+
+HeaderSections class : (Inheritance: Collection->TObject)
+properties
+methods
+  add(): THeaderSection - Adds a new header and returns it
+  insert(index): THeaderSection - inserts a new header at the index and returns it
+  delete(index) - deletes(and frees) the headersection at the given index
 
 
 TreeNode class : (Inheritance: TObject)
@@ -1427,6 +1581,9 @@ methods
 
 
 Timer Class : (Inheritance: Component->object)
+createTimer(delay, function(...),...):
+  Creates a timer object that waits the given delay, executes the given function, and then selfdestructs.  Tip: Don't use the timer after it has ran
+
 createTimer(owner OPT, enabled OPT):
   Creates a timer object. If enabled is not given it will be enabled by default (will start as soon as an onTimer event has been assigned)
   Owner may be nil, but you will be responsible for destroying it instead of being the responsibility of the owner object)
@@ -1459,6 +1616,7 @@ properties
   Font: Font - The font object
   Width: integer - Width of the canvas
   Height: integer - Height of the canvas
+  Handle: integer - DC handle of the canvas
 
 
 
@@ -1471,11 +1629,15 @@ methods
   getPenPosition()
   setPenPosition(x,y)
   clear() - Clears the canvas
+
   line(sourcex, sourcey, destinationx, destinationy)
   lineTo(destinationx, destinationy)
-  rect(x1,y1,x2,y2)
-  fillRect(x1,y1,x2,y2)
+  rect(x1,y1,x2,y2) - Draws a rectangle
+  fillRect(x1,y1,x2,y2) - Draws a filled rectangle
+  roundRect(x1,y1,x2,y2,rx,ry) - Draws a rectangle with rounded corners
+  drawFocusRect(x1,y1,x2,y2) - Draws the focus rectangle shape
   textOut(x,y, text)
+  textRect(rect,x,y,text): write the text within the given rectangle. The text supports some ansi escape characters
   getTextWidth(text)
   getTextHeight(text)
   getPixel(x,y)
@@ -1489,7 +1651,9 @@ methods
   ellipse(x1,y1,x2,y2)
   gradientFill(x1,y1,x2,y2, startcolor, stopcolor, direction) : Gradient fills a rectangle. Direction can be 0 or 1. 0=Vertical 1=Horizontal
   copyRect(dest_x1,dest_y1,dest_x2,dest_y2, sourceCanvas, source_x1,source_y1,source_x2,source_y2) : Draws an image from one source to another. Useful in cases of doublebuffering
+  strectDraw(rect
   draw(x,y, graphic) : Draw the image of a specific Graphic class
+  strectDraw(rect, graphic): Draw the image of a specific Graphic class and stretch it so it fits in the given rectangle
   getClipRect() : Returns a table containing the fields Left, Top, Right and Bottom, which define the invalidated region of the graphical object. Use this to only render what needs to be rendered in the onPaint event of objects
 
 Pen Class : (Inheritance: CustomPen->CanvasHelper->Object)
@@ -1545,6 +1709,8 @@ methods
   setWidth(graphic, width): Sets thw width in pixels
   getHeight(graphic)
   setHeight(graphic, height)
+  loadFromFile(filename)
+  saveToFile(filename)
 
 RasterImage class: (Inheritance: Graphic->Object) : Base class for some graphical controls
 properties
@@ -1558,6 +1724,9 @@ methods
   getPixelFormat(pixelformat):  Sets the pixelformat for this image. Will clear the current image if it had one. Supported pixelformats: pf1bit, pf4bit, pf8bit, pf15bit, pf16bit, pf24bit, pf32bit (recommended)
   setTransparentColor(integer): Sets the color that will be rendered as transparent when drawn
   getTransparentColor():  Returns the color set to be transparent
+  saveToStream(stream) : Saves the image to a stream object
+  loadFromStream(stream): Loads the image from a stream object
+
 
 
 Bitmap class: (Inheritance: CustomBitmap->RasterImage->Graphic->Object) : Bitmap based Graphic object
@@ -1605,13 +1774,28 @@ methods
   getOnHotkey
 
 
-CommonDialog class:
+CommonDialog class: (Inheritance: CommonDialog->Component->Object)
   properties
     OnShow: function(sender)
     OnClose: function(sender)
     Title: string - The caption at top of the dialog
   methods
     Execute() : Shows the dialog and return true/false depending on the dialog
+
+ColorDialog class: 
+createColorDialog(owner OPTIONAL) - Creates a new colordialog
+properties
+  property Color: integer - The currently selected color
+  property CustomColors: TStrings - List of custom colors ( entry looks like ColorA = FFFF00 ... ColorX = C0C0C0 ) 
+
+methods
+
+ColorBox class:
+  Combobox like component where you can pick a color
+
+createColorBox(owner) - Creates a new colorbox
+
+
 
 FindDialog Class: (Inheritance: CommonDialog->Component->Object)
 properties
@@ -1627,6 +1811,7 @@ methods
 
 
 FileDialog Class: (Inheritance: CommonDialog->Component->Object)
+createFindDialog(owner)
 properties
 
   DefaultExt: string - When not using filters this will be the default extention used if no extension is given
@@ -1702,21 +1887,29 @@ methods
   writeDword(integer)
   readQword(): integer
   writeQword(integer)
+  readAnsiString(): string
+  writeAnsiString(string)
 
 
 MemoryStream Class (Inheritance: Stream->Object)
 createMemoryStream()
 
 properties
-  Memory: Integer - The address in Cheat Engine's memory this stream is loaded (READONLY, tends to change)
+  Memory: Integer - The address in Cheat Engine's memory this stream is loaded (READONLY, tends to change on size change)
 
 methods
   loadFromFile(filename) : Replaces the contents in the memory stream with the contents of a file on disk
   saveToFile(filename) : Writes the contents of the memory stream to the specified file
+  loadFromFileNoError(filename):boolean,string - Replaces the contents in the memory stream with the contents of a file on disk. On success returns true, else false with a secondary return the error message
+  saveToFileNoError(filename):boolean,string - Writes the contents of the memory stream to the specified file. On success returns true, else false with a secondary return the error message
+
 
 
 FileStream Class (Inheritance: HandleStream->Stream->Object)
-createFileStream(filename, mode)
+createFileStream(filename, mode)  - 
+  Creates a filestream object.  mode can be fmCreate(0xff00), fmOpenRead, fmOpenWrite or fmOpenReadWrite and can be or-ed with
+  fmShareCompat(0x0000), fmShareExclusive(0x0010), fmShareDenyWrite(0x0020), fmShareDenyRead(0x0030) or fmShareDenyNone(0x0040)
+
 
 StringStream Class (Inheritance: Stream->Object)
 createStringStream(string)
@@ -1853,10 +2046,11 @@ properties
   AllowIncrease: boolean - Allow value increasing, unfreeze will reset it to false
   AllowDecrease: boolean - Allow value decreasing, unfreeze will reset it to false
   Collapsed: boolean - Set to true to collapse this record or false to expand it. Use expand/collapse methods for recursive operations. 
-  IsGroupHeader: boolean - Set to true if the record was created as a Group Header with no address or value info. (ReadOnly)
+  IsGroupHeader: boolean - Set to true if the record was created as a Group Header with no address or value info. 
+  IsAddressGroupHeader: boolean - Set to true if the record was created as a Group Header with address.
   IsReadable: boolean - Set to false if record contains an unreadable address. NOTE: This property will not be set until the value property is accessed at least once. (ReadOnly)
 
-  Options: String set - a string enclosed by square brackets filled with the options seperated by a comma. Valid options are: moHideChildren, moActivateChildrenAsWell, moDeactivateChildrenAsWell, moRecursiveSetValue, moAllowManualCollapseAndExpand, moManualExpandCollapse
+  Options: String set - a string enclosed by square brackets filled with the options seperated by a comma. Valid options are: moHideChildren, moActivateChildrenAsWell, moDeactivateChildrenAsWell, moRecursiveSetValue, moAllowManualCollapseAndExpand, moManualExpandCollapse, moAlwaysHideChildren
   
   DropDownLinked: boolean - if dropdown list refers to list of another memory record eg. (memrec name)
   DropDownLinkedMemrec: string - Description of linked memrec or emptystring if not linked
@@ -1873,7 +2067,7 @@ properties
   Count: Number of children
   Child[index] : Array to access the child records
   [index] = Child[index]
-  Parent: MemoryRecord - self explanatory
+  Parent: MemoryRecord - The parent of the memory record
 
   HotkeyCount: integer - Number of hotkeys attached to this memory record
   Hotkey[] : Array to index the hotkeys
@@ -1909,7 +2103,7 @@ methods
   getHotkeyByID(integer): Returns the hotkey with the given id
 
   reinterpret()
-  createHotkey({keys}, action, value OPTIONAL): Returns a hotkey object 
+  createHotkey({keys}, action, value OPTIONAL, description OPTIONAL): Returns a hotkey object 
 
   disableWithoutExecute(): Sets the entry to disabled without executing the disable section
 
@@ -1988,10 +2182,40 @@ properties
   OnGuiUpdate: function(memscan, TotalAddressesToScan, CurrentlyScanned, ResultsFound) - Called during the scan so you can update the interface if needed
   FoundList: FoundList - The foundlist currently attached to this memscan object
   OnlyOneResult: boolean - If this is set to true memscan will stop scanning after having found the first result, and written the address to "Result"
+  IsUnique: boolean - Same as OnlyOneResult but will use multiple threads, so if the value is not unique you will be given a random address
   Result: Integer - If OnlyOneResult is used this will contain the address after a scan has finished
 
+  CodePage: boolean;
+  ScanOption: TScanoption 
+  VariableType: TVariableType
+  VarType: TVariableType : ^
+  Roundingtype: TRoundingType
+  Scanvalue: string : Value to scan
+  Scanvalue1: string : ^
+  Scanvalue2: string : Secondary value to scan (e.g value between scan)
+  Startaddress: integer
+  Stopaddress: integer
+  Hexadecimal: boolean 
+  BinaryStringAsDecimal: boolean
+  UTF16: boolean 
+  Casesensitive: boolean 
+  Fastscanmethod: TFastScanMethod 
+  Fastscanparameter: string
+  Customtype: TCustomType
+
+  ScanWritable:    TScanregionpreference ('scanDontCare', 'scanExclude', 'scanInclude')
+  ScanExecutable:  TScanregionpreference ('scanDontCare', 'scanExclude', 'scanInclude') 
+  ScanCopyOnWrite: TScanregionpreference ('scanDontCare', 'scanExclude', 'scanInclude')
+  
+  Percentage: boolean
+  CompareToSavedScan: boolean 
+  SavedScanName: string
 
 methods
+  scan(): Does either a first scan or next scan based on the given property values
+  firstScan() : Does a first scan based on the given property values
+  nextScan() : Does a next scan based on the given property values
+  newScan() : Clears the current results
 
   firstScan(scanoption, vartype, roundingtype, input1, input2 ,startAddress ,stopAddress ,protectionflags ,alignmenttype ,"alignmentparam" ,isHexadecimalInput ,isNotABinaryString, isunicodescan, iscasesensitive);
     Does an initial scan.
@@ -2073,7 +2297,7 @@ methods
     ispercentage: When true and the scanoption is of type soValueBetween, soIncreasedValueBy or soDecreasedValueBy will cause CE to do a precentage scan instead of a normal value scan
     savedResultName: String that holds the name of a saved result list that should be compared against. First scan is called "FIRST"
 
-  newScan() : Clears the current results
+
   waitTillDone() : Waits for the memscan thread(s) to finish scanning. Always use this
   saveCurrentResults(name) : Save the current scanresults to a unique name for this memscan. This save can be used to compare against in a subsequent next scan
   getAttachedFoundlist() : Returns a FoundList object if one is attached to this scanresults. Returns nil otherwise
@@ -2100,7 +2324,7 @@ methods
   deinitialize() : Release the results
   getCount()
   getAddress(index) : Returns the address as a string
-  getValue(index) : Returs the value as a string
+  getValue(index) : Returns the value as a string
 
 
 Memoryview class: (Inheritance: Form->ScrollingWinControl->CustomControl->WinControl->Control->Component->Object)
@@ -2115,6 +2339,10 @@ DisassemblerviewLine class: (Inheritance: Object)
 properties
   Address: The current address of this line
   Owner: The Disassemblerview that owns this line
+  OnDisassemblerViewOverride: Called when a line is about to be rendered
+    funtion(address, addressstring, bytestring, opcodestring, parameterstring, specialstring)
+      return addressstring, bytestring, opcodestring, parameterstring, specialstring
+    end    
 
 methods
   -
@@ -2148,8 +2376,15 @@ methods
 Hexadecimal class: (Inheritance: Panel->CustomControl->WinControl->Control->Component->Object)
   The visual hexadecimal object used on the memory view window
 properties
+  Address: integer - The top address
+  HasSelection: boolean - True if something is selected
+  SelectionStart: integer
+  SelectionStop: integer
+  DisplayType: displaytype - The type being shown: dtByte, dtByteDec, dtWord, dtWordDec, dtDword, dtDwordDec, dtQword, dtQwordDec, dtSingle, dtDouble
   OnAddressChange(hexadecimalview, function): function(hexadecimalview, address)
   OnByteSelect(hexadecimalview, function): function(hexadecimalview, address, address2)
+  OnCharacterRender: function(sender, address, text) return text end - Called when a character is being rendered. Use this to change it or change the canvas fonts (Warning: slow)
+  OnValueRender: function(sender, address, text) return text end - Called when a value (depending on the displaytype) is being rendered. Use this to change it or change the canvas fonts (Warning: slow)
 
 methods
   -
@@ -2166,7 +2401,7 @@ createThreadSuspended(function(Thread,...), ...) :
 
 
 properties
-  name: string - This name will be shown when the thread terminated abnormally
+  Name: string - This name will be shown when the thread terminated abnormally
   Finished: boolean - Returns true if the thread has reached the end.  Do not rely on this if the thread is freeOnTerminate(true) (which is the default)
   Terminated: boolean - Returns true if the Terminate method has been called
 
@@ -2255,7 +2490,7 @@ Column[index]: structColumn - Fetches a structColumn object from the structure f
 
 GroupCount: integer - The number of groups
 Group[index]: structGroup - Fetches a structGroup object from the structure form
-
+OnStatusbarUpdate(function(notificationbar)) - Called when the statusbar gets updated
 
 
 
@@ -2292,6 +2527,7 @@ Structure class related functions:
 getStructureCount(): Returns the number of Global structures. (Global structures are the visible structures)
 getStructure(index): Returns the Structure object at the given index
 createStructure(name): Returns an empty structure object (Not yet added to the Global list. Call structure.addToGlobalStructureList manually)
+createStructureFromName(string): If PDB files are loaded this will create a structure with that name if it can be found
 
 
 
@@ -2379,6 +2615,10 @@ dbk_initialize() : Returns true if the dbk driver is loaded in memory. False if 
 dbk_useKernelmodeOpenProcess() : Switches the internal pointer of the OpenProcess api to dbk_OpenProcess
 dbk_useKernelmodeProcessMemoryAccess() : Switches the internal pointer to the ReadProcessMemory and WriteProcessMemory apis to dbk_ReadProcessMemory and dbk_WriteProcessMemory
 dbk_useKernelmodeQueryMemoryRegions() : Switches the internal pointer to the QueryVirtualMemory api to dbk_QueryVirtualMemory
+dbk_usePhysicalMemoryAccess() : Changes all memory access to physical memory
+dbk_setSaferPhysicalMemoryScanning(state: BOOLEAN): When set to true CE's memory scanner will skip hardware device owned memory. Default state is true
+dbk_readPhysicalMemory(address, size): bytetable
+dbk_writePhysicalMemory(address, size): boolean
 dbk_getPEProcess(processid) : Returns the pointer of the EProcess structure of the selected processid
 dbk_getPEThread(threadid) : Gets the pointer to the EThread  structure
 
@@ -2390,6 +2630,7 @@ dbk_executeKernelMemory(address, parameter) :
 
 
 dbvm_initialize(offloados:Boolean OPTIONAL, reason:String OPTIONAL) : Initializes the dbvm functions (dbk_initialize also calls this) offloados is a boolean that when set will offload the system onto dbvm if it's not yet running (and only IF the dbk driver is loaded)
+dbvm_addMemory(pagecount): Adds memory to DBVM (one page is 4096 bytes)
 dbvm_readMSR(msr): See dbk_readMSR but then using dbvm
 dbvm_writeMSR(msr, value): See dbk_writeMSR
 dbvm_getCR4(): Returns the real Control Register 4 state
@@ -2419,7 +2660,7 @@ dbvm_cloak_activate(physicalbase, virtualbase OPTIONAL):
   Hides an executable memory range (4096 bytes) from snooping eyes
   Note: It is recommended to cause a copy-on-write on the target first, else this will affect all processes that have this memory block loaded
 dbvm_cloak_deactivate(physicalbase): Disables the cloak and restores the executable memory to what the system thinks it is
-dbvm_cloak_readOriginal(physicalbase): Reads the memory that will get executed.  On success returns a 4096 byte long bytetable (remember, lua indexes start at 1, so offset 0 is index 1)
+dbvm_cloak_readOriginal(physicalbase): Reads the memory that will get executed.  On success returns a 4096 byte long bytetable starting from the base of the page (remember, lua indexes start at 1, so offset 0 is index 1)
 dbvm_cloak_writeOriginal(physicalbase, bytetable[4096]): Writes the memory that will get executed. 
 
 dbvm_changeregonbp(physicaladdress, changereginfo, virtualaddress OPTIONAL): boolean
@@ -2449,9 +2690,13 @@ dbvm_changeregonbp(physicaladdress, changereginfo, virtualaddress OPTIONAL): boo
       newR14: integer
       newR15: integer
 
+dbvm_removechangeregonbp(physicaladdress) : Disables the changeregonbp breakpoint
+
 dbvm_log_cr3_start() : Tells DBVM to record (up to 512) unique CR3 values it encounters
 dbvm_log_cr3_stop() : Stops the logging and returns the results as a table
 
+dbvm_speedhack_setSpeed(speed): Changes the speed the timestamp counter goes up (similar to speedhack in a process but affects the whole system including the clock)
+dbvm_setTSCAdjust(enabled, timeout): If enabled (default true with timeout 2000) will return a small(20-30) timestamp between multiple rdtsc/rdtscp instructions.  The timeout is the number of actual TSC to watch else the actual time is given. A high timeout can make your system unstable
 
 dbk_getCR0(): Returns Control Register 0
 dbk_getCR3(): Returns Control Register 3 of the currently opened process
@@ -2759,6 +3004,8 @@ createPipe(pipename, inputsize OPTIONAL, outputsize OPTIONAL) : Creates a LuaPip
 
 properties
   valid: boolean - Returns true if the pipe has been created properly. False on failure (e.g wrong pipename)
+  handle: integer - The handle of the pipe serverside (this can be used with duplicateHandle to get a handle into the target process)
+
 
 methods
   acceptConnection() - Waits for a client to connect to this pipe (Warning: Freezes the thread this is executed in)
@@ -2861,6 +3108,7 @@ properties
   Page[]: TabSheet - Get a specific page (TabSheet)
 methods
   addTab() : TabSheet - Creates a new TabSheet
+  tabRect(index): Rect - returns a rect table describing the position of the specific tab
 
 TabSheet class (WinControl->Control->Component->Object)
   Part of a page control. This object can contain other objects
@@ -2908,6 +3156,49 @@ properties
 methods
   byteTableToValue({bytetable},Address Optional)
   valueToByteTable(value, Address Optional)
+
+TFrmTracer class (Inheritance: Form->ScrollingWinControl->CustomControl->WinControl->Control->Component->Object)
+
+properties
+  Count: integer - number of entries in the list
+  SelectionCount: integer - The number of selected entries
+
+  Entry[index]: table - Information about each entry. Read only. (Index starts at 0)
+    table is formatted as:
+    {
+      address: integer - address of the instruction
+      instruction: string - disassembled instruction
+      instructionSize: integer - bytesize of the instruction
+      referencedAddress: integer - address the code references
+      referencedData: bytearray - The bytes of the referenced data at the time of tracing
+      context: contexttable - the state of the cpu when this instruction got executed (contains registers(EAX/RAX, ...), floating points(FP) and XMM values
+      hasStackSnapshot: boolean - set to true if there is a stack entry      
+      selected: boolean - Set to true if the entry is selected
+
+    }
+
+
+  StackEntry[index]: bytearray - The stacksnapshot of that entry. Nil if not available
+
+methods
+
+
+
+TfrmUltimap2 class(Inheritance: Form->ScrollingWinControl->CustomControl->WinControl->Control->Component->Object) 
+getUltimap2(): TfrmUltimap2 - Returns the ultimap2 form, nil if not open
+
+properties
+  Count: integer - The number of entries in the list (READONLY)
+methods
+  isInList(address): boolean,count - returns true if the current address is in the list of addresses. In case of true, it also returns the count value (up to 255)
+
+TfrmCodeFilter class(Inheritance: Form->ScrollingWinControl->CustomControl->WinControl->Control->Component->Object) 
+getCodeFilter(): TfrmCodeFilter - Returns the codefilter form
+
+properties
+methods
+  isInList(address): boolean - Returns true if this address is in the list
+
 
 ----SQL Classes----
 CustomConnection class (Inheritance: Component->Object)
@@ -3199,7 +3490,7 @@ properties
 methods
   -
 
-RemoteThread(Inheritance: -)
+RemoteThread class(Inheritance: -)
 createRemoteThread(address, parameter)
 
 properties
@@ -3216,3 +3507,130 @@ properties:
   exports: Table containing all exports
   entryPoint: integer - address of the entrypoint
   
+
+WriteLog class(Inheritence: -)
+The writelog is the log that keeps all writes (when enabled)
+
+properties
+  status: boolean
+  logsize: integer 
+
+methods
+  getLog(): table - Returns an indexed table with the write logs. each entry has a table with the fields: address, original and new
+
+
+
+
+Diagram class(Inheritance: CustomControl->WinControl->Control->LclComponent->Component->Object):
+The diagram class lets you represent data using blocks and lines.
+
+createDiagram(owner)
+
+properties
+  LineThickness: integer - Default thickness of lines in pixels
+  LineColor: integer - Sets the default color of lines
+  PlotPointColor: integer - Sets the default color for points
+  BlockBackground: integer - Color of the diagramBlocks
+  BackgroundColor: integer - Color of the diagram background
+  ArrowStyles: string - can be one or more of the following between [ and ] : 
+                          asOrigin : There will be an arrow at the point of origin
+                          asDestination : There will be an arrow at the destination
+                          asPoints: There will be an arrow at plot point locations
+                          asCenterBetweenPoints: There will be an arrow between two points
+                          asCenter: There will be an arrow in the center of the line
+
+  BlockCount: integer - Returns the number of blocks in the diagram (readonly)
+  Block[index]: DiagramBlock - Returns the block at the specific index
+  LinkCount: integer - Returns the number of linkes in the diagram (readonly)
+  Link[index]: DiagramLink - Returns the link at the specific index
+  DrawPlotPoints: boolean - If set to true linkpoints will be shown
+  AllowUserToCreatePlotPoints: boolean - If true(default) will allow the user to create plotpoints by clicking on lines
+  AllowUserToMovePlotPoints: boolean - If true(default) will allow the user to move plotpoints by dragging them
+  AllowUserToResizeBlocks: boolean - If true(default) will allow the user to resize blocks
+  AllowUserToMoveBlocks: boolean - If true(default) will allow the user to move blocks around by draging the caption
+  AllowUserToChangeAttachPoints: boolean - If true(default) will allow the user to move move the point where a line connects to the block by dragging it
+  ScrollX: integer - The horizontal scroll
+  ScrollY: integer - The vertical scroll
+  Zoom: float - The zoom level to use 
+
+
+
+
+methods
+  createBlock(): DiagramBlock - Creates a new uninitialized block
+  addConnection(Source: DiagramBlock, Destination: DiagramBlock): DiagramLink - Creates a link between the two blocks
+  addConnection(Source: BlockSideDescriptorTable, Destination: BlockSideDescriptorTable) - Creates a link using the BlockSideDescritorTable table definition
+      BlockSideDescriptorTable=
+      {
+         Block: DiagramBlock - The block to attach to
+         Side: integer - One of the blockside typedefs: dbsTop=0, dbsLeft=1, dbsRight=2, dbsBottom=3, dbsTopLeft=4, dbsTopRight=5, dbsBottomLeft=6, dbsBottomRight=7
+         Position: integer - Position on the provided side based on the center. Only for Sides 0 to 3
+      } 
+
+  saveAsImage(filenamepng): saves the current display as an PNG image
+  saveToFile(filename): Saves the state of the diagram to a file
+  loadFromFile(filename): loads the state of the diagram from a file
+  saveToStream(stream): Saves the state of the diagram to a stream
+  loadFromStream(stream): loads the state of the diagram from a stream
+  getObjectAt({x,y}): Returns the object at this position. nil if nothing
+  
+
+
+DiagramBlock class:
+The diagramBlock is a block with a header and body which can contain text (ansi escape codes supported) 
+
+properties
+  Owner: Diagram - The diagram that this block is in
+  X: integer - x-position of the block
+  Y: integer - y-position of the block
+  Width: integer - Width of the block
+  Height: integer - Height of the block
+  Caption: string - Header of the block (ansi escape codes supported)
+  Strings: Strings - Strings object containing the lines of the block (ansi escape codes supported)
+  BackgroundColor: integer - When set overrides the default color for the block to the given one
+  TextColor: Integer - The starting/default textcolor
+  Name: string - The name of the block
+  AutoSize: boolean - If true the width and height of the box will adjust to the given Caption and Strings
+  AutoSide: boolean - If true the connection side of a link will be picked for you instead of providing the side yourself
+  AutoSideDistance: integer - If autoside is true and there are multiple lines on the same side, this determines the distance between
+  ShowHeader: boolean - If true show ther header. (default true)
+  DragBody: boolean - If true allows dragging of the body. Useful when there is no header (default false)
+  Tag: integer - Use for whatever you like
+  OnDoubleClickHeader: function(DiagramBlock) - Function to call when the block's header is doubleclicked
+  OnDoubleClickBody: function(DiagramBlock) - Function to call when the block's body is doubleclick
+  OnRenderHeader: function(sender,rect,beforeownerdraw): boolean - Function to call when the header is being rendered. This is called twice, before and after the normal painting code. In case of before and the function returns nil or false, the original text will not be drawn
+  OnRenderBody: function(sender,rect,beforeownerdraw): boolean - ^ but then for body
+  OnDragStart: funtion(DiagramBlock) - Called when a block starts getting dragged
+  OnDrag: function(DiagramBlock) - Called when a block is dragged around
+  OnDragEnd: function(DiagramBlock) - Called when a dragged block is released
+
+methods
+  getLinks(): table - Returns a table two elements: 'asSource' and 'asDestination'. each of those will have a table with DiagramLinks linking with the box
+  overlapsWith(block): boolean - Returns true if the two blocks overlap
+  intersectsWithLine({x,y},{x,y}): boolean,intersectpoint - Returns true and the point of intersection or false if no itersection
+
+
+DiagramLink class:
+Links between blocks
+
+properties
+  OriginBlock: DialogBlock - The source of the link 
+  DestinationBlock: DialogBlock - The destination of the link
+  OriginDescriptor: BlockSideDescriptorTable
+  DestinationDescriptor: BlockSideDescriptorTable   
+  PointCount: integer - The number of points in the table
+  Points[index]: table{x,y} - Return a table with x,y coordinates for the point at the given index (index starts at 0)
+  LineColor: integer - Color of the line , when set overrides the default
+  Linethickness: integer - thickness of the line, when set overrides the default
+  ArrowStyles: string - See diagram ArrowStyles
+  Name: string - Name of the link
+  Tag: integer - Use for whatever youy like
+  OnDblClick: function(sender) - Function to call when the link is doubleclicked
+
+methods
+  hasLinkToBlock(DiagramBlock): boolean - Returns true/false depending on if this link has a connection to the provided block
+  reset() - Sets all custom colors sizes back to default
+  updateSide(BlockSideDescriptorTable): Updates the side of the block described by the BlockSideDescriptorTable   
+  getPointIndexAt(x,y): integer - Returns the pointindex at the given x, y coordinate
+  addPoint(x,y,index OPTIONAL): creates a point. If no index is given if inside the line at that line index, else at the end of the list.  If a index is given at that specific index. 
+  removeAllPoints(): Removes all points

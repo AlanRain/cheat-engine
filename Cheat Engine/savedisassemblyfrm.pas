@@ -5,13 +5,15 @@ unit savedisassemblyfrm;
 interface
 
 uses
-  LCLIntf, LResources, Messages, SysUtils, Variants, Classes, Graphics,
+  LCLIntf, LResources, Messages, LMessages, SysUtils, Variants, Classes, Graphics,
   Controls, Forms, Dialogs, symbolhandler, symbolhandlerstructs, disassembler,
-  StdCtrls, ComCtrls, ActnList, Clipbrd, ExtCtrls, strutils;
+  StdCtrls, ComCtrls, ActnList, Clipbrd, ExtCtrls, strutils, Parsers;
 
 type
   TfrmSavedisassembly = class;
   TSaveDisassemblyThread=class(TThread)
+  private
+    procedure closeform;
   public
     progressbar: tprogressbar;
     startaddress: ptrUint;
@@ -19,9 +21,11 @@ type
     address: boolean;
     bytes: boolean;
     opcode: boolean;
+    comment: boolean;
     copymode: boolean;
     filename: string;
     form: TfrmSavedisassembly;
+
     procedure execute; override;
   end;
 
@@ -32,6 +36,7 @@ type
     cbAddress: TCheckBox;
     cbBytes: TCheckBox;
     cbOpcode: TCheckBox;
+    cbComment: TCheckBox;
     Edit1: TEdit;
     Edit2: TEdit;
     Label1: TLabel;
@@ -57,7 +62,7 @@ type
 
 implementation
 
-uses MemoryBrowserFormUnit, disassemblerComments;
+uses MemoryBrowserFormUnit, disassemblerComments, ProcessHandlerUnit;
 
 resourcestring
   rsCopyDisassembledOutput = 'Copy disassembled output';
@@ -142,10 +147,6 @@ begin
     if specialpart='' then
       specialpart:=disassembler.DecodeLastParametersToString;
 
-    if specialpart<>'' then
-      opcodepart:=opcodepart+' { '+specialpart+' }';
-
-
 
     if address then
     begin
@@ -164,9 +165,11 @@ begin
 
     if opcode then temps:=temps+opcodepart;
 
-    if (address or opcode) or (currentaddress>stopaddress) then
+    if (comment) and (specialpart<>'') then temps:=temps+' { '+specialpart+' }';
+
+    if (address or opcode or comment) or (currentaddress>stopaddress) then
     begin
-      //each line for address / opcode, and only one time at the and for bytes only
+      //each line for address/opcode/comment, and only one time at the and for bytes only
       if copymode then
       begin
         //save to clipboard
@@ -178,11 +181,9 @@ begin
       temps:=''; //erase the current data
     end;
 
+    progressbar.position:=trunc(currentaddress/stopaddress*1000);
 
-    if (i mod 10=0) and (currentaddress<{$ifdef cpu64}QWORD($7fffffffffffffff){$else}$7fffffff{$endif}) then
-      progressbar.position:=currentaddress;
   end;
-
   if copymode then
   begin
     clipboard.AsText:=cpbuf.GetText;
@@ -196,8 +197,17 @@ begin
 
   disassembler.free;
 
+  {$ifdef windows}
   if not terminated then postmessage(form.handle,wm_close,0,0);
+  {$else}
+  queue(CloseForm);
+  {$endif}
 
+end;
+
+procedure TSaveDisassemblyThread.closeform;
+begin
+  form.close;
 end;
 
 procedure TfrmSavedisassembly.setCopyMode(mode: boolean);
@@ -234,8 +244,24 @@ begin
   end;
 
 
-  startaddress:=symhandler.getAddressFromName(edit1.Text);
-  stopaddress:=symhandler.getAddressFromName(edit2.text);
+  try
+    startaddress:=StrToQWordEx('$'+edit1.Text);
+  except
+    startaddress:=symhandler.getAddressFromName(edit1.Text);
+  end;
+
+  try
+    stopaddress:=StrToQWordEx('$'+edit2.text);
+  except
+    stopaddress:=symhandler.getAddressFromName(edit2.text);
+  end;
+
+  if startaddress>stopaddress then
+  begin  //xor swap
+    startaddress:=startaddress xor stopaddress;
+    stopaddress:=stopaddress xor startaddress;
+    startaddress:=startaddress xor stopaddress;
+  end;
 
 
   if (FCopyMode) or savedialog1.Execute then
@@ -244,24 +270,18 @@ begin
     SaveDisassemblyThread.address:=cbAddress.checked;
     SaveDisassemblyThread.bytes:=cbBytes.Checked;
     SaveDisassemblyThread.opcode:=cbOpcode.Checked;
+    SaveDisassemblyThread.comment:=cbComment.Checked;
     SaveDisassemblyThread.startaddress:=startaddress;
     SaveDisassemblyThread.stopaddress:=stopaddress;
     SaveDisassemblyThread.filename:=savedialog1.FileName;
     SaveDisassemblyThread.copymode:=fcopymode;
 
-
-
     SaveDisassemblyThread.form:=self;
 
-    if (startaddress<{$ifdef cpu64}QWORD($7fffffffffffffff){$else}$7fffffff{$endif}) and (stopaddress<{$ifdef cpu64}QWORD($7fffffffffffffff){$else}$7fffffff{$endif}) then
-    begin
-      progressbar1.Max:=stopaddress;
-      progressbar1.Min:=startaddress;
-      progressbar1.Position:=startaddress;
-      if not progressbar1.Visible then progressbar1.Visible:=true;
-    end
-    else
-      progressbar1.Visible:=false;
+    progressbar1.Min:=0;
+    progressbar1.Max:=1000;
+    progressbar1.Position:=0;
+    if not progressbar1.Visible then progressbar1.Visible:=true;
 
     SaveDisassemblyThread.progressbar:=progressbar1;
 
@@ -292,7 +312,26 @@ end;
 
 procedure TfrmSavedisassembly.FormShow(Sender: TObject);
 begin
-
+    if processhandler.is64bit then
+    begin
+      //init just once if needed
+      if (edit1.Text = '') or (edit2.Text = '') then  // if not initialized
+       begin
+          edit2.text:='7FFFFFFFFFFFFFFF';
+          edit1.Text:='0000000000000000';
+       end;
+    end
+    else
+    begin
+       //init just once if needed
+       if (edit1.Text = '') or (edit2.Text = '') then  // if not initialized
+       begin
+          edit2.text:='7FFFFFFF';
+          edit1.Text:='00000000';
+       end;
+    end;
+  edit1.Constraints.MinWidth:=canvas.GetTextWidth('XXXXXXXXXXXXXXXX');
+  edit2.Constraints.MinWidth:=edit1.Constraints.MinWidth;
 end;
 
 procedure TfrmSavedisassembly.waittilldone;

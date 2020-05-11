@@ -4,10 +4,13 @@ unit debug;
 
 interface
 
+{$ifdef windows}
+
 uses windows, sysutils, dbk32functions, classes, multicpuexecution;
 
 type TDebuggerstate=packed record
   threadid: uint64;
+  causedbydbvm: uint64;
 	eflags : uint64;
 	eax : uint64;
 	ebx : uint64;
@@ -60,7 +63,11 @@ function DBKDebug_GD_SetBreakpoint(active: BOOL; debugregspot: integer; Address:
 function DBKDebug_SetAbilityToStepKernelCode(state: boolean):BOOL; stdcall;
 procedure DBKDebug_SetStoreLBR(state: BOOL);
 
+{$endif}
+
 implementation
+
+{$ifdef windows}
 
 
 
@@ -304,5 +311,7 @@ begin
     deviceiocontrol(hdevice,cc,@state,sizeof(state),nil,0,br,nil);
   end;
 end;
+
+{$endif}
 
 end.

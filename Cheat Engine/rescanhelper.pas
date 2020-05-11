@@ -4,9 +4,19 @@ unit rescanhelper;
 
 interface
 
+{$ifdef darwin}
+
+uses macport, LCLIntf, classes, symbolhandler, CEFuncProc,NewKernelHandler, maps,
+  sysutils, syncobjs, pagemap, Sockets, (*CELazySocket, PointerscanNetworkCommands, *)
+  zstream, commonTypeDefs;
+{$endif}
+
+{$ifdef windows}
+
 uses windows, LCLIntf, classes, symbolhandler, CEFuncProc,NewKernelHandler, maps,
   sysutils, syncobjs, pagemap, Sockets, CELazySocket, PointerscanNetworkCommands,
   zstream, commonTypeDefs;
+{$endif}
 
 type
 
@@ -217,6 +227,15 @@ begin
           address:=ptrUint(mbi.BaseAddress)+mbi.RegionSize;
           continue;
         end;
+
+      {$ifdef windows}
+      if Skip_PAGE_WRITECOMBINE then
+        if (mbi.AllocationProtect and PAGE_WRITECOMBINE)=PAGE_WRITECOMBINE then
+        begin
+          address:=ptrUint(mbi.BaseAddress)+mbi.RegionSize;
+          continue;
+        end;
+      {$endif}
 
       setlength(memoryregion,length(memoryregion)+1);
 

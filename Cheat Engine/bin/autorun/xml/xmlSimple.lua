@@ -1,4 +1,5 @@
-module(..., package.seeall)
+--module(..., package.seeall)
+local f={}
 
 ---------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------
@@ -19,7 +20,7 @@ module(..., package.seeall)
 --
 ---------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------
-function newParser()
+function f.newParser()
 
     XmlParser = {};
 
@@ -53,14 +54,14 @@ function newParser()
     end
 
     function XmlParser:ParseArgs(node, s)
-        string.gsub(s, "(%w+)=([\"'])(.-)%2", function(w, _, a)
+        string.gsub(s, "([%w_]+)=([\"'])(.-)%2", function(w, _, a)
             node:addProperty(w, self:FromXmlString(a))
         end)
     end
 
     function XmlParser:ParseXmlText(xmlText)
         local stack = {}
-        local top = newNode()
+        local top = f.newNode()
         table.insert(stack, top)
         local ni, c, label, xarg, empty
         local i, j = 1, 1
@@ -73,11 +74,11 @@ function newParser()
                 stack[#stack]:setValue(lVal)
             end
             if empty == "/" then -- empty element tag
-                local lNode = newNode(label)
+                local lNode = f.newNode(label)
                 self:ParseArgs(lNode, xarg)
                 top:addChild(lNode)
             elseif c == "" then -- start tag
-                local lNode = newNode(label)
+                local lNode = f.newNode(label)
                 self:ParseArgs(lNode, xarg)
                 table.insert(stack, lNode)
 		top = lNode
@@ -123,7 +124,7 @@ function newParser()
     return XmlParser
 end
 
-function newNode(name)
+function f.newNode(name)
     local node = {}
     node.___value = nil
     node.___name = name
@@ -169,3 +170,5 @@ function newNode(name)
 
     return node
 end
+
+return f

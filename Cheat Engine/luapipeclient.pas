@@ -8,6 +8,7 @@ unit LuaPipeClient;
 
 interface
 
+{$ifdef windows}
 uses
   windows, Classes, SysUtils, LuaPipe, lua, luaclass;
 
@@ -20,18 +21,21 @@ type
     constructor create(pipename: string; timeout: integer=0);
   end;
 
+  {$endif}
+
 implementation
 
 uses LuaHandler;
 
 
+{$ifdef windows}
 
 constructor TLuaPipeClient.create(pipename: string; timeout: integer=0);
 begin
   inherited create;
 
   ftimeout:=timeout;
-  fOverLapped:=timeout>0;
+  fOverLapped:=true; //timeout>0;
 
   if foverlapped then
     pipe:=CreateFile(pchar('\\.\pipe\'+pipename), GENERIC_READ or GENERIC_WRITE, FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING,  FILE_FLAG_OVERLAPPED, 0)
@@ -67,10 +71,13 @@ begin
   end;
 end;
 
+
 procedure initializeLuaPipeClient;
 begin
   lua_register(LuaVM, 'connectToPipe', luapipeclient_connectToPipe);
 end;
+
+{$endif}
 
 
 end.

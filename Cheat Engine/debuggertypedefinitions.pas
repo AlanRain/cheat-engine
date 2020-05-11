@@ -5,7 +5,13 @@ unit debuggertypedefinitions;
 interface
 
 uses
-  Classes, SysUtils, Windows, FoundCodeUnit, formchangedaddresses, frmTracerUnit,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  Windows,
+  {$endif}
+  Classes, SysUtils,
   cefuncproc, NewKernelHandler, commonTypeDefs;
 
 type
@@ -28,7 +34,7 @@ type
   TContinueOption = (co_run=0, co_stepinto=1, co_stepover=2, co_runtill=3);
 
 type
-  TBreakpointMethod = (bpmInt3=0, bpmDebugRegister=1, bpmException=2);
+  TBreakpointMethod = (bpmInt3=0, bpmDebugRegister=1, bpmException=2, bpmDBVM=3);
 
 type
   TBreakOption = (bo_Break = 0, bo_ChangeRegister = 1, bo_FindCode = 2, bo_FindWhatCodeAccesses = 3, bo_BreakAndTrace=4, bo_OnBreakpoint=5);
@@ -36,6 +42,35 @@ type
 
 type
   TBreakpointTrigger = (bptExecute=0, bptAccess=1, bptWrite=2);
+
+  {$ifdef cpu32}
+  M128A= record
+    low,high: qword;
+  end;
+  {$endif}
+
+  TXMMFIELDS=array [0..3] of DWORD;
+  PXMMFIELDS=^TXMMFIELDS;
+
+ TRegisterModificationFloatList=bitpacked record
+   change_fp0: 0..1;
+   change_fp1: 0..1;
+   change_fp2: 0..1;
+   change_fp3: 0..1;
+   change_fp4: 0..1;
+   change_fp5: 0..1;
+   change_fp6: 0..1;
+   change_fp7: 0..1;
+ end;
+ PRegisterModificationFloatList=^TRegisterModificationFloatList;
+
+ TRegisterModificationXMMListSingleEntry=bitpacked record
+   change_part1: 0..1;
+   change_part2: 0..1;
+   change_part3: 0..1;
+   change_part4: 0..1;
+ end;
+ PRegisterModificationXMMListSingleEntry=^TRegisterModificationXMMListSingleEntry;
 
 type
   tregistermodificationBP32 = record
@@ -70,6 +105,28 @@ type
     new_zf: BOOL;
     new_sf: BOOL;
     new_of: BOOL;
+
+    change_FP: BYTE; //binary, each bit is a new FP
+    new_FP0: double;
+    new_FP1: double;
+    new_FP2: double;
+    new_FP3: double;
+    new_FP4: double;
+    new_FP5: double;
+    new_FP6: double;
+    new_FP7: double;
+
+    change_XMM: DWORD; //binary, each nibble is an XMM register, and each bit of the nibble is a dword part of the xmm reg
+    new_XMM0: TXMMFIELDS;
+    new_XMM1: TXMMFIELDS;
+    new_XMM2: TXMMFIELDS;
+    new_XMM3: TXMMFIELDS;
+    new_XMM4: TXMMFIELDS;
+    new_XMM5: TXMMFIELDS;
+    new_XMM6: TXMMFIELDS;
+    new_XMM7: TXMMFIELDS;
+
+    usesDouble: BYTE; //each bit specifies an xmm field what weas edited using a double specifier
   end;
 
 type
@@ -124,6 +181,38 @@ type
     new_zf: BOOL;
     new_sf: BOOL;
     new_of: BOOL;
+
+    change_FP: BYTE; //binary, each bit is a new FP
+    new_FP0: M128A; //only need the 10 bytes
+    new_FP1: M128A;
+    new_FP2: M128A;
+    new_FP3: M128A;
+    new_FP4: M128A;
+    new_FP5: M128A;
+    new_FP6: M128A;
+    new_FP7: M128A;
+
+    change_XMM: QWORD; //binary, each nibble is an XMM register, and each bit of the nibble is a dword part of the xmm reg
+    new_XMM0: TXMMFIELDS;
+    new_XMM1: TXMMFIELDS;
+    new_XMM2: TXMMFIELDS;
+    new_XMM3: TXMMFIELDS;
+    new_XMM4: TXMMFIELDS;
+    new_XMM5: TXMMFIELDS;
+    new_XMM6: TXMMFIELDS;
+    new_XMM7: TXMMFIELDS;
+    new_XMM8: TXMMFIELDS;
+    new_XMM9: TXMMFIELDS;
+    new_XMM10: TXMMFIELDS;
+    new_XMM11: TXMMFIELDS;
+    new_XMM12: TXMMFIELDS;
+    new_XMM13: TXMMFIELDS;
+    new_XMM14: TXMMFIELDS;
+    new_XMM15: TXMMFIELDS;
+
+    //for gui purposes only:
+    usesDouble: WORD; //each bit specifies an xmm field what weas edited using a double specifier
+
   end;
 
 type
@@ -144,76 +233,7 @@ type
 {$endif}
 
 
-type
 
-  PBreakpoint = ^TBreakPoint;
-
-  TBreakpointEvent=function(bp: pointer; OnBreakpointContext: pointer):boolean of object;
-
-  TBreakpoint = record
-    {
-    the following 2 items: active and markedfordeletion handle the case when a
-    breakpoint has been removed right at the same moment it has fired and the user
-    thread managed to get to the critical section first
-    }
-    active: boolean;  //todo: Perhaps a per/threadid activate field
-    //set if the debugger should handle it fully, or just skip it (but no dbg_nothandled)
-    markedfordeletion: boolean;
-    deletetickcount: dword;
-    deletecountdown: integer; //when markedfordeletion is set and deletecountdown hits 0, it'll get deleted
-    referencecount: integer; //the number of windows this bp is currently being edited in (mainly used in 'set/change condition')
-
-    //If set the next time no events take place this breakpoint will be removed
-
-    //    condition: TCondition;
-
-    owner: PBreakpoint;
-    //in case of a multi DR/address breakpoint, removing one of these or the owner, affects the others
-    address: uint_ptr;
-    size: integer; //size of this breakpoint (can be any size in case of exception bp)
-    originalbyte: byte;
-
-    originalaccessrights: TAccessRights;
-
-    breakpointMethod: TBreakpointMethod;
-    breakpointAction: TBreakOption;
-    breakpointTrigger: TBreakpointTrigger;
-    debugRegister: integer;
-    //if debugRegister bp this will hold which debug register is used for it
-
-    FoundcodeDialog: TFoundcodedialog;
-    frmchangedaddresses: Tfrmchangedaddresses;
-    frmTracer: TfrmTracer;
-    tracecount: integer;
-    traceendcondition: pchar;
-    tracestepOver: boolean; //when set the tracer will step over instead of single step
-    traceNoSystem: boolean; //when set the tracer will step over system module addresses
-
-    //set if it's a bpaFetchRegistersandcontinue set on memory access
-    //ChangedAddresses: TfrmChangedAddresses; //set if it's a bpaFetchRegistersandcontinue set on execute
-    ThreadID: DWORD;
-    //set if the breakpoint is for one specific thread, ignore breaks if it happens on other threads
-
-    OneTimeOnly: boolean; //true if the breakpoint should be removed after the first time it is hit
-    StepOverBp: boolean;
-
-    changereg: tregistermodificationBP;
-
-    conditonalbreakpoint: record
-      script: pchar;
-      easymode: boolean;
-    end;
-
-    OnBreakpoint: TBreakpointEvent; //method to be called by the debuggerthread when this breakpoint triggers
-    OnBreakpointContext: pointer;
-  end;
-
-
-  TBreakpointSplit = record //the breakpointsplit type is used by GetBreakpointList
-    address: uint_ptr;      //address alligned on size
-    size: integer;       //1, 2 or 4
-  end;
-  TBreakpointSplitArray = array of TBreakpointSplit;
  // TBreakpointList=TFPGList<PBreakpoint>;
 
 function BreakPointTriggerIsWatchpoint(bpt: TBreakpointTrigger): boolean; inline;
@@ -240,6 +260,7 @@ resourcestring
   rsSoftwareBreakpoint = 'Software Breakpoint';
   rsHardwareBreakpoint = 'Hardware Breakpoint';
   rsExceptionBreakpoint = 'Exception Breakpoint';
+  rsDBVMBreakpoint = 'DBVM Breakpoint';
   rsBreak = 'Break';
   rsChangeReg = 'Change reg';
   rsFindCode = 'Find code';
@@ -292,6 +313,7 @@ begin
     bpmInt3:           result:=rsSoftwareBreakpoint;
     bpmDebugRegister:  result:=rsHardwareBreakpoint;
     bpmException:      result:=rsExceptionBreakpoint;
+    bpmDBVM:           result:=rsDBVMBreakpoint;
     else
        result:='Error';
   end;

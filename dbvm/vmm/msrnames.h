@@ -8,8 +8,10 @@
 #ifndef MSRNAMES_H_
 #define MSRNAMES_H_
 
+#define IA32_TIME_STAMP_COUNTER   0x10
 #define IA32_APICBASE_MSR         0x1b
 #define IA32_FEATURE_CONTROL_MSR  0x3a
+#define IA32_TSC_ADJUST           0x3b
 #define IA32_MTRRCAP_MSR          0xfe
 #define IA32_SYSENTER_CS_MSR      0x174
 #define IA32_SYSENTER_ESP_MSR     0x175
@@ -88,5 +90,9 @@
 #define IA32_FS_BASE_MSR          0xc0000100
 #define IA32_GS_BASE_MSR          0xc0000101
 
+#define IA32_TSC_MSR              0x10
+#define IA32_TSC_AUX_MSR          0xc0000103
+
+#define VM_HSAVE_PA_MSR           0xc0010117 //AMD
 
 #endif /* MSRNAMES_H_ */

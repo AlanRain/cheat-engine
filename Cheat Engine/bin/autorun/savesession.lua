@@ -18,8 +18,8 @@ require("lfs")
 function loadMemoryScan_thread(t)
   --the thread is used to bypasses a bug in 6.3
   t.synchronize(function(t)
-	  ms=getCurrentMemscan()
-	  mf=getMainForm()
+	  local ms=getCurrentMemscan()
+	  local mf=getMainForm()
 
 	  if getOpenedProcessID()==0 then
 		messageDialog(translate("Open a process first"), mtError, mbOK)
@@ -27,32 +27,32 @@ function loadMemoryScan_thread(t)
 	  end
 
 
-	  dialog=createOpenDialog()
+	  local dialog=createOpenDialog()
 	  dialog.DefaultExt=".CS"
 	  dialog.Filter=translate("Cheat Engine Scan files").." (*.CS)|*.CS"
 	  dialog.FilterIndex=1
 
 	  if dialog.execute()==false then return end
-	   filename=dialog.Filename
+	  local filename=dialog.Filename
 	  dialog.destroy()
 
 
-	   input=io.open(filename,"rb")
+	   local input=io.open(filename,"rb")
 
-	   scanvaluelength=string.byte(input:read(1))
-	   scanvalue=input:read(scanvaluelength)
+	   local scanvaluelength=string.byte(input:read(1))
+	   local scanvalue=input:read(scanvaluelength)
 
 
 
-	   scantype=string.byte(input:read(1))
-	   vartype=string.byte(input:read(1))
+	   local scantype=string.byte(input:read(1))
+	   local vartype=string.byte(input:read(1))
 
-	   savedscancount=string.byte(input:read(1))
+	   local savedscancount=string.byte(input:read(1))
 
-	  savedscans={}
+	  local savedscans={}
 	  for i=1,savedscancount do
-		 length=string.byte(input:read(1))
-		savedscans[i]=input:read(length)
+		 local length=string.byte(input:read(1))
+		 savedscans[i]=input:read(length)
 	  end
 
 	  --initial data has been read, now setup the scan state to be compatible with the saved state
@@ -154,7 +154,7 @@ function loadMemoryScan_thread(t)
 
 		local data
 
-		j=filesize
+		local j=filesize
 		while j>0 do
 		  local block=512*1024
 		  if block>j then
@@ -264,9 +264,9 @@ function saveMemoryScan()
 
      for j=1,#savedscans do
        if savedscans[j]==ext then
-       found=true
-       break
-     end
+         found=true
+         break
+       end
      end
 
      if found==false then
@@ -331,22 +331,40 @@ SaveScanSession={}
 
 SaveScanSession.miSaveScanSession=createMenuItem(mf.Menu)
 SaveScanSession.miSaveScanSession.caption=translate('Save scan session')
+--SaveScanSession.miSaveScanSession.ImageIndex=39
 SaveScanSession.miSaveScanSession.Shortcut='Ctrl+Alt+Shift+S'
 SaveScanSession.miSaveScanSession.OnClick=saveMemoryScan
 SaveScanSession.miSaveScanSession.Enabled=false
+
+local s=createPicture()
+s.LoadFromFile(getCheatEngineDir()..[[autorun\images\export128x128.png]])
+local ii=MainForm.mfImageList.add(s.Bitmap)
+SaveScanSession.miSaveScanSession.ImageIndex=ii
+s.destroy()
+
 mf.Menu.Items[0].insert(9, SaveScanSession.miSaveScanSession)
 
 
 SaveScanSession.miLoadScanSession=createMenuItem(mf.Menu)
 SaveScanSession.miLoadScanSession.caption=translate('Load scan session')
+--SaveScanSession.miLoadScanSession.ImageIndex=38
 SaveScanSession.miLoadScanSession.Shortcut='Ctrl+Alt+Shift+O'
 SaveScanSession.miLoadScanSession.OnClick=loadMemoryScan
 SaveScanSession.miLoadScanSession.Enabled=false
+
+local s=createPicture()
+s.LoadFromFile(getCheatEngineDir()..[[autorun\images\import128x128.png]])
+local ii=MainForm.mfImageList.add(s.Bitmap)
+SaveScanSession.miLoadScanSession.ImageIndex=ii
+s.destroy()
+
 mf.Menu.Items[0].insert(10, SaveScanSession.miLoadScanSession)
 
-mi=createMenuItem(mf.Menu) --seperator
+local mi=createMenuItem(mf.Menu) --seperator
 mi.caption='-'
 mf.Menu.Items[0].insert(11, mi)
+
+mi.Visible=MainForm.miSignTable.Visible
 
 local oldFileMenuClick=mf.Menu.Items[0].OnClick
 

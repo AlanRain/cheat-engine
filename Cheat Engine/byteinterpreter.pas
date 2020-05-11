@@ -1,17 +1,24 @@
 unit byteinterpreter;
 
 {$MODE Delphi}
-
+{$WARN 4105 off : Implicit string type conversion with potential data loss from "$1" to "$2"}
+{$WARN 4104 off : Implicit string type conversion from "$1" to "$2"}
 interface
 
-{$ifdef windows}
-uses windows, LCLIntf, sysutils, symbolhandler, CEFuncProc, NewKernelHandler, math,
-  CustomTypeHandler, ProcessHandlerUnit, commonTypeDefs, LazUTF8;
-{$endif}
 
-{$ifdef unix}
+
+{$ifdef jni}
 uses unixporthelper, sysutils, symbolhandler, ProcessHandlerUnit, NewKernelHandler, math,
   CustomTypeHandler, commonTypeDefs;
+{$else}
+uses
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}LCLIntf, sysutils, symbolhandler, CEFuncProc, NewKernelHandler, math,
+  CustomTypeHandler, ProcessHandlerUnit, commonTypeDefs, LazUTF8;
 {$endif}
 
 resourcestring
@@ -46,7 +53,7 @@ uses parsers;
 
 {$ifdef unix}
 function isreadable(address: ptruint): boolean;
-var x: dword;
+var x: ptruint;
     t: byte;
 begin
   result:=ReadProcessMemory(processhandle, pointer(address), @t, 1, x);
@@ -111,7 +118,7 @@ begin
 
         v:=StrToQWordEx(value);
 
-        if (variabletype=vtCustom) and customtype.scriptUsesFloat then
+        if (variabletype=vtCustom) and (customtype<>nil) and customtype.scriptUsesFloat then
           s:=StrToFloat(value);
       end;
     end;
@@ -133,19 +140,24 @@ begin
 
       vtCustom:
       begin
-        getmem(ba, customtype.bytesize);
-        try
-          if ReadProcessMemory(processhandle, pointer(address), ba, customtype.bytesize, x) then
-          begin
-            if customtype.scriptUsesFloat then
-              customtype.ConvertFloatToData(s, ba, address)
-            else
-              customtype.ConvertIntegerToData(v, ba, address);
+        if customtype<>nil then
+        begin
 
-            WriteProcessMemory(processhandle, pointer(address), ba, customtype.bytesize, x);
+          getmem(ba, customtype.bytesize);
+          try
+            if ReadProcessMemory(processhandle, pointer(address), ba, customtype.bytesize, x) then
+            begin
+              if customtype.scriptUsesFloat then
+                customtype.ConvertFloatToData(s, ba, address)
+              else
+                customtype.ConvertIntegerToData(v, ba, address);
+
+              WriteProcessMemory(processhandle, pointer(address), ba, customtype.bytesize, x);
+            end;
+          finally
+            freememandnil(ba);
+
           end;
-        finally
-          freememandnil(ba);
 
         end;
       end;
@@ -613,13 +625,13 @@ begin
       if processhandler.is64bit then
       begin
         if (address mod 8) = 0 then
-          val('$'+symhandler.getNameFromAddress(pqword(@buf[0])^,true,true),v,e)
+          val('$'+symhandler.getNameFromAddress(pqword(@buf[0])^,true,true,nil,nil,8,false),v,e)
         else
           e:=0;
       end
       else
       begin
-        val('$'+symhandler.getNameFromAddress(pdword(@buf[0])^,true,true),v,e);
+        val('$'+symhandler.getNameFromAddress(pdword(@buf[0])^,true,true,nil,nil,8,false),v,e);
       end;
 
       if e>0 then //named

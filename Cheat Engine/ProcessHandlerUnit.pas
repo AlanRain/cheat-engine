@@ -10,7 +10,12 @@ process will set it to the different tab's process
 
 interface
 
-uses {$ifndef jni}LCLIntf, {$endif}newkernelhandler, classes, sysutils;
+uses
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifndef jni}LCLIntf, {$endif}
+  newkernelhandler, classes, sysutils;
 
 type
   TSystemArchitecture=(archX86=0, archArm=1);
@@ -48,7 +53,7 @@ implementation
 {$ifdef jni}
 uses networkinterface, networkInterfaceApi;
 {$else}
-uses LuaHandler, mainunit, networkinterface, networkInterfaceApi, ProcessList, lua, FileUtil;
+uses LuaHandler, mainunit, {$ifdef windows}networkinterface, networkInterfaceApi,{$endif} ProcessList, lua, FileUtil;
 {$endif}
 
 procedure TProcessHandler.overridePointerSize(newsize: integer);
@@ -58,7 +63,11 @@ end;
 
 function TProcessHandler.isNetwork: boolean;
 begin
+  {$ifdef windows}
   result:=(((processhandle shr 24) and $ff)=$ce) and (getConnection<>nil);
+  {$else}
+  result:=false;
+  {$endif}
 end;
 
 procedure TProcessHandler.setIs64bit(state: boolean);
@@ -75,11 +84,23 @@ begin
 end;
 
 procedure TProcessHandler.setProcessHandle(processhandle: THandle);
-var c: TCEConnection;
+var
+  {$ifdef windows}
+  c: TCEConnection;
+  {$endif}
   arch: integer;
 begin
-  fprocesshandle:=processhandle;
+  if (fprocesshandle<>0) and (fprocesshandle<>THANDLE(-1)) then
+  begin
+    try
+      closehandle(fprocesshandle);
+    except //debugger issue
+    end;
+    fprocesshandle:=0;
+  end;
 
+  fprocesshandle:=processhandle;
+  {$ifdef windows}
   c:=getConnection;
   if c<>nil then
   begin
@@ -112,11 +133,11 @@ begin
 
   end
   else
+  {$endif}
   begin
     fSystemArchitecture:=archX86;
+
     setIs64Bit(newkernelhandler.Is64BitProcess(fProcessHandle));
-
-
   end;
 
   {$ifdef ARMTEST}
@@ -126,40 +147,25 @@ begin
 
   if processhandle<>0 then
   begin
-    //OutputDebugString('setProcessHandle: Calling open');
     open;
-    //OutputDebugString('After open');
   end;
 
-
-
-    {if GetCurrentThreadId<>MainThreadID then
-        TThread.Synchronize(nil, open) }
-
-
-
-
-    //(synchronize(open));
-//  if (mainform<>nil) and (mainform.addresslist<>nil) then
-//    mainform.addresslist.needsToReinterpret:=true;
 end;
 
 procedure TProcessHandler.Open;
-{$ifdef windows}
 var mn: string;
-{$endif}
 begin
   //GetFirstModuleNa
   {$ifndef jni}
-  {$ifdef windows}
+
   if processid<>0 then
   begin
     mn:=GetFirstModuleName(processid);
+
     lua_pushstring(luavm, pchar(extractfilename(mn)));
     lua_setglobal(luavm, 'process');
   end;
 
-  {$endif}
 
   LUA_functioncall('onOpenProcess', [ptruint(processid)]);   //todo: Change to a callback array/list
   {$endif}
@@ -179,4 +185,5 @@ initialization
   processhandler:=TProcessHandler.create;
 
 end.
+
 

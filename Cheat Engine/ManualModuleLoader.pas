@@ -8,9 +8,11 @@ This routine will examine a module and then load it into memory, taking care of 
 
 interface
 
+{$ifdef windows}
+
 uses windows, LCLIntf, classes, sysutils, imagehlp, dialogs, PEInfoFunctions,CEFuncProc,
      NewKernelHandler, symbolhandler, dbk32functions, vmxfunctions, commonTypeDefs,
-     SymbolListHandler, symbolhandlerstructs;
+     SymbolListHandler, symbolhandlerstructs, StringHashList;
 
 resourcestring
   rsMMLNotAValidFile = 'not a valid file';
@@ -32,6 +34,10 @@ type TModuleLoader=class
     isdriver: boolean;
 
     pid: dword;
+
+    importlist: TStringHashList;
+    procedure cleanupExportList;
+    function FindKernelModuleExport(modulename: string; exportname: string): ptruint;
   public
     Exporttable: TStringlist;
     procedure createSymbolListHandler;
@@ -43,8 +49,12 @@ type TModuleLoader=class
     property SymbolList: TSymbollistHandler read fSymbolList;
 end;
 
+{$endif}
+
 implementation
 
+
+{$ifdef windows}
 uses ProcessHandlerUnit;
 
 procedure TModuleLoader.createSymbolListHandler;
@@ -73,6 +83,25 @@ begin
   fSymbolList.PID:=pid;
 
   symhandler.AddSymbolList(fSymbolList);
+end;
+
+procedure TModuleLoader.cleanupExportList;
+begin
+  if importlist<>nil then
+  begin
+    freeandnil(importlist);
+  end;
+
+end;
+
+function TModuleLoader.FindKernelModuleExport(modulename: string; exportname: string): ptruint;
+begin
+  //check if this module is already exported
+  if importlist=nil then
+    importlist:=TStringHashList.Create(true);
+
+  //todo: implement this
+  result:=0;
 end;
 
 constructor TModuleLoader.create(filename: string);
@@ -106,6 +135,8 @@ var
   mi: TModuleInfo;
 begin
   inherited create;
+
+
   self.filename:=filename;
 
   exporttable:=tstringlist.create;
@@ -115,7 +146,7 @@ begin
   if pid=0 then
     pid:=GetCurrentProcessId;
     
-  processhandle:=dbk32functions.OP(PROCESS_ALL_ACCESS, true, pid);
+  processhandle:=dbk32functions.OP(ifthen<dword>(GetSystemType<=6,$1f0fff, process_all_access), true, pid);
 
   filemap:=tmemorystream.Create;
   try
@@ -278,7 +309,11 @@ begin
                       importfunctionnamews:=importfunctionname;
                       funcaddress:=GetKProcAddress64(@importfunctionnamews[1]);
                       if funcaddress=0 then
-                        raise exception.create(rsMMLFailedFindingAddressOf+pwidechar(@importfunctionnamews[1]));
+                      begin
+                        funcaddress:=FindKernelModuleExport(importmodulename, importfunctionname);
+                        if funcaddress=0 then
+                          raise exception.create(rsMMLFailedFindingAddressOf+pwidechar(@importfunctionnamews[1]));
+                      end;
                     end
                     else
                     begin
@@ -379,7 +414,11 @@ begin
     end;
   finally
     filemap.free;
+
+    cleanupExportList;
   end;
 end;
+
+{$endif}
 
 end.

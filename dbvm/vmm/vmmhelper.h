@@ -140,6 +140,16 @@ typedef struct _vmxhoststate //structure for easy management of hoststates
 } vmxhoststate, *pvmxhoststate;
 
 
+typedef struct _EXITINTINFO
+{
+  BYTE Vector;
+  BYTE Type: 3;
+  BYTE ErrorCodeValid: 1;
+  DWORD Zero: 19;
+  BYTE Valid: 1;
+  DWORD ErrorCode;
+}  __attribute__((__packed__)) EXITINTINFO, *PEXITINTINFO;
+
 typedef volatile struct _vmcb
 {
 	WORD InterceptCR0_15Read;
@@ -261,7 +271,7 @@ typedef volatile struct _vmcb
 	    DWORD    inject_ERRORCODE;
 	  };
 	};
-	QWORD N_CR3;
+	QWORD N_CR3; //nested paging
 
 	union{
 	  QWORD Enable_LBR_Virtualization;
@@ -345,22 +355,22 @@ typedef volatile struct _vmcb
     QWORD RIP; //0x578
 
     BYTE reserved13[88];
-    QWORD RSP;
+    QWORD RSP; //5d8
 
-    BYTE reserved14[24];
-    QWORD RAX;
-    QWORD STAR;
-    QWORD LSTAR;
-    QWORD CSTAR;
-    QWORD SFMASK;
-    QWORD KernelGsBase;
-    QWORD SYSENTER_CS;
-    QWORD SYSENTER_ESP;
-    QWORD SYSENTER_EIP;
-    QWORD CR2;
+    BYTE reserved14[24];  //5e0
+    QWORD RAX; //5f8
+    QWORD STAR; //600
+    QWORD LSTAR; //608
+    QWORD CSTAR; //610
+    QWORD SFMASK; //618
+    QWORD KernelGsBase; //620
+    QWORD SYSENTER_CS; //628
+    QWORD SYSENTER_ESP; //630
+    QWORD SYSENTER_EIP; //638
+    QWORD CR2; //640
 
-    BYTE reserved15[32];
-    QWORD G_PAT;
+    BYTE reserved15[32]; //648
+    QWORD G_PAT;  //0x668
     QWORD DBGCTL;
     QWORD BR_FROM;
     QWORD BR_TO;
@@ -378,7 +388,9 @@ typedef struct _singlestepreason
       //3=change reg on bp event (restored the int3 bp (0xcc))
 
 
-  int ID; //index of the array used for this reason (watchlist, cloaklist, changeregonbplist)
+  int ID; //index of the array used for this reason (watchlist, cloaklist, changeregonbplist) (About to become obsolete and replaced by the data pointer)
+
+  void* Data; //pointer to the object for this reason (watchlist, cloaklist, changeregonbplist)
 } SingleStepReason, *PSingleStepReason;
 
 typedef volatile struct tcpuinfo
@@ -387,6 +399,10 @@ typedef volatile struct tcpuinfo
   volatile struct tcpuinfo *next; //must be offset 0x8
   DWORD guest_error; //must be offset 0x10
   DWORD cpunr; //must be offset 0x14
+  QWORD lasttsc; //must be offset 0x18
+  QWORD totaltsctaken; //must be offset 0x20
+  QWORD lastTSCTouch;
+  QWORD lowestTSC;
   DWORD active;
   DWORD apicid;
 
@@ -567,19 +583,25 @@ typedef volatile struct tcpuinfo
 
     int currenterrorcode; //if not 0, return this errorcode on vmread
     vmxhoststate originalhoststate;
+    vmxhoststate dbvmhoststate;
     int runningvmx; //1 if the previous call was a vmlaunch/vmresume and no vmexit happened yet
 
   } vmxdata;
 
   QWORD EPTPML4;
   criticalSection EPTPML4CS; // since other cpu's can map in pages for other cpu's as well, use a CS
+  /*
   PEPT_PTE *eptCloakList; //pointer to the EPT entry of the index related to CloakedPages
   int eptCloakListLength;
+  */
   int eptCloak_LastOperationWasWrite;
   QWORD eptCloak_LastWriteOffset;
 
   PEPT_PTE *eptWatchList; //pointer to the EPT entry of the index related to the WatchList
   int eptWatchListLength;
+  int eptUpdated;
+
+
 
 
   struct //single stepping data
@@ -591,6 +613,19 @@ typedef volatile struct tcpuinfo
     int ReasonsLength;
   } singleStepping;
 
+  int BPAfterStep;
+  int BPCausedByDBVM; //gets read out by ce's driver to see if the bp was because of DBVM or not
+
+#ifdef STATISTICS
+  int eventcounter[56];
+#endif
+
+  struct {
+    UINT64 RFLAGS, CR4;
+    WORD CS, SS;
+  } SwitchKernel;
+
+  int LastVMCall;
 
 } tcpuinfo, *pcpuinfo; //allocated when the number of cpu's is known
 
@@ -671,6 +706,8 @@ typedef struct _regCR4
 #define CR4_FSGSBASE    (1<<16)
 #define CR4_PCIDE       (1<<17)
 #define CR4_OSXSAVE     (1<<18)
+#define CR4_SMEP		(1<<20)
+#define CR4_SMAP		(1<<21)
 
 #define CR0_PE          (1<<0)
 #define CR0_NE          (1<<5)

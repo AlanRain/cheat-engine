@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs,
-  StdCtrls, ExtCtrls, Menus, newkernelhandler;
+  StdCtrls, ExtCtrls, Menus, newkernelhandler{$ifdef darwin},macport{$endif};
 
 
 type
@@ -22,6 +22,7 @@ type
 
   TfrmDebugEvents = class(TForm)
     Button1: TButton;
+    deImageList: TImageList;
     lbDebugEvents: TListBox;
     MenuItem1: TMenuItem;
     Panel1: TPanel;

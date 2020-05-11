@@ -5,9 +5,10 @@ unit LuaListbox;
 interface
 
 uses
-  Classes, SysUtils,lua, lualib, lauxlib, stdctrls, controls;
+  Classes, SysUtils, lua, lualib, lauxlib, stdctrls, controls;
 
 procedure initializeLuaListbox;
+procedure listbox_addMetaData(L: PLua_state; metatable: integer; userdata: integer);
 
 implementation
 
@@ -117,7 +118,7 @@ end;
 
 function listbox_getSelected(L: PLua_State): integer; cdecl;
 var
-  listbox: Tlistbox;
+  listbox: Tcustomlistbox;
   index: integer;
 begin
   result:=0;
@@ -132,7 +133,7 @@ end;
 
 function listbox_setSelected(L: PLua_State): integer; cdecl;
 var
-  listbox: Tlistbox;
+  listbox: Tcustomlistbox;
   index: integer;
 begin
   result:=0;

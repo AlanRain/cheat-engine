@@ -5,8 +5,13 @@ unit aboutunit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, ExtCtrls, LResources,shellapi, vmxfunctions, NewKernelHandler;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,shellapi,
+  {$endif}LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls, ExtCtrls, LResources, vmxfunctions, NewKernelHandler;
 
 type
 
@@ -25,11 +30,13 @@ type
     Label27: TLabel;
     Label28: TLabel;
     Label29: TLabel;
+    Label3: TLabel;
     Label30: TLabel;
     Label31: TLabel;
     Label32: TLabel;
     Label33: TLabel;
     Label34: TLabel;
+    Label4: TLabel;
     Label5: TLabel;
     Image1: TImage;
     Button1: TButton;
@@ -46,6 +53,7 @@ type
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure Button2Click(Sender: TObject);
     procedure FormShow(Sender: TObject);
+    procedure Label4Click(Sender: TObject);
     procedure Label8Click(Sender: TObject);
     procedure Label9Click(Sender: TObject);
     procedure Image1MouseDown(Sender: TObject; Button: TMouseButton;
@@ -91,7 +99,6 @@ end;
 
 procedure TAbout.Button2Click(Sender: TObject);
 begin
-
   shellexecute(0,'open','https://www.paypal.com/xclick/business=dark_byte%40hotmail.com&no_note=1&tax=0&lc=US',nil,nil,sw_maximize);
 end;
 
@@ -124,9 +131,14 @@ begin
   UpdateDBVMStatus;
 end;
 
+procedure TAbout.Label4Click(Sender: TObject);
+begin
+  shellexecute(0,'open',pchar('https://www.patreon.com/cheatengine'),nil,nil,sw_maximize);
+end;
+
 procedure TAbout.Label8Click(Sender: TObject);
 begin
-  ShellExecute(0, pchar('open'),pchar('http://cheatengine.org/'), pchar(''),pchar(''), SW_MAXIMIZE	);
+  ShellExecute(0, pchar('open'),pchar('https://cheatengine.org/'), pchar(''),pchar(''), SW_MAXIMIZE	);
 end;
 
 procedure TAbout.Label9Click(Sender: TObject);
@@ -148,6 +160,7 @@ end;
 procedure TAbout.lblDBVMClick(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 begin
+  {$ifdef windows}
   //if not isRunningDBVM then
   begin
     //if not isDBVMCapable then exit;
@@ -178,9 +191,12 @@ begin
       end;
     end
     else
-      if frmDBVMLoadManual<>nil then frmDBVMLoadManual.SetFocus
-      else tfrmDBVMLoadManual.create(Application).Show;
+      if frmDBVMLoadManual<>nil then 
+        frmDBVMLoadManual.SetFocus
+      else 
+        tfrmDBVMLoadManual.create(Application).Show;
   end;
+  {$endif}
 end;
 
 procedure TAbout.UpdateDBVMStatus;
@@ -195,6 +211,7 @@ var
   oldvmx_password2: DWORD;
 
 begin
+  {$ifdef windows}
   oldvmx_password1:=vmx_password1;
   oldvmx_password2:=vmx_password2;
   OutputDebugString('UpdateDBVMStatus');
@@ -249,6 +266,9 @@ begin
 
   vmx_password1:=oldvmx_password1;
   vmx_password2:=oldvmx_password2;
+  {$else}
+  lblDBVM.visible:=false;
+  {$endif}
 end;
 
 

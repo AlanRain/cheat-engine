@@ -3,19 +3,45 @@
 
 #include <stddef.h>
 
+
+//#define DELAYEDSERIAL
+
+#define AMDNP  //enable AMD nested paging support
+
+#ifdef DELAYEDSERIAL
+extern int useserial;
+#endif
+
+#define STATISTICS
+
+//#define TSCHOOK
+
 #define MAX_STACK_SIZE 0x10000
 
 #if (defined SERIALPORT) && (SERIALPORT != 0)
   #define DEBUG //comment for release
   #define DEBUGINTHANDLER //comment for release
+  #define CHECKAPICID
 #endif
 
 #if (DISPLAYDEBUG==1)
   #define DEBUG
   #define DEBUGINTHANDLER
+  #define CHECKAPICID
 #endif
 
+
+
 #define ULTIMAPDEBUG //for debugging ultimap (I seem to have misplaced my serial port...)
+
+#define EXIT_FAILURE 0xffffffff
+#define EXIT_SUCCESS 0
+
+#define INT_MAX __INT_MAX__
+#define INT_MIN (-INT_MAX - 1)
+#define SHRT_MAX __SHRT_MAX__
+#define SCHAR_MAX __SCHAR_MAX__
+#define UCHAR_MAX (SCHAR_MAX * 2 + 1)
 
 
 #define BYTE unsigned char
@@ -67,6 +93,9 @@ typedef volatile struct _criticalSection
   volatile int locked;
   volatile int apicid;
   int lockcount;
+#ifdef DEBUG
+  int ignorelock;
+#endif
 } criticalSection, *PcriticalSection;
 
 
@@ -117,9 +146,9 @@ typedef union
     unsigned VIF    :1; // 19
     unsigned VIP    :1; // 20
     unsigned ID     :1; // 21
-    unsigned reserved5  :32; // 22-63
-    unsigned reserved6  :10; // 22-63
-  };
+    unsigned reserved5  :11; // 22-63
+    unsigned reserved6  :32; // 22-63
+  }__attribute__((__packed__));
 } __attribute__((__packed__)) RFLAGS,*PRFLAGS;
 
 
@@ -127,13 +156,19 @@ typedef union
 //extern UINT64 inportb(UINT64 port);
 //extern void outportb(UINT64 port, UINT64 value);
 
-inline void bochsbp(void);
-inline void jtagbp(void);
-inline unsigned char inportb(unsigned int port);
-inline void outportb(unsigned int port,unsigned char value);
+void bochsbp(void);
+void jtagbp(void);
 
-inline unsigned long inportd(unsigned int port);
-inline void outportd(unsigned int port,unsigned long value);
+/* Input a byte from a port */
+unsigned char inportb(unsigned int port);
+
+void outportb(unsigned int port,unsigned char value);
+
+unsigned long inportd(unsigned int port);
+
+void outportd(unsigned int port,unsigned long value);
+
+int abs(int j);
 
 extern void clearScreen(void);
 extern void debugbreak(void);
@@ -143,8 +178,10 @@ extern ULONG getRSP(void);
 extern ULONG getRBP(void);
 
 int itoa(unsigned int value,int base, char *output,int maxsize);
+int lltoa(unsigned long long value,int base, char *output,int maxsize);
 //int atoi(const char *nptr);
 unsigned long long atoi2(char* input, int base, int *err);
+unsigned long long int strtoull(const char *nptr, char **endptr, int base);
 
 void zeromemory(volatile void *address, unsigned int size);
 void printchar(char c, int x, int y, char foreground, char background);
@@ -153,19 +190,40 @@ void sendchar(char c);
 
 extern void enableserial(void);
 
+
+
 size_t strspn(const char *str, const char *chars);
 int isalpha(int c);
 int isdigit(int c);
 int isalnum(int c);
+int isspace(int c);
+int iscntrl(int c);
 int toupper(int c);
 int tolower(int c);
+int isprint(int c);
 
-inline int min(int x,int y);
-inline int max(int x,int y);
+int isgraph(int c);
+int islower(int c);
+int ispunct(int c);
+int isupper(int c);
+int islower(int c);
+int isxdigit(int c);
+
+
+
+QWORD minq(QWORD x,QWORD y);
+QWORD maxq(QWORD x,QWORD y);
+int min(int x,int y);
+int max(int x,int y);
+
 
 double floor(double x);
 double ceil(double x);
+double pow(double x, double y);
+double sqrt(double x);
+double frexp(double x, int *exp);
 
+double fmod(double a, double b);
 
 int strcoll(const char *s1, const char *s2);
 
@@ -175,8 +233,12 @@ int strcoll(const char *s1, const char *s2);
   void sendstringf(char *string, ...);
 
   int sprintf(char *str, const char *format, ...);
+  int snprintf(char *str, size_t size, const char *format, ...);
+
 
   char *strchr(const char *s, int c);
+
+  char *addCharToString(char c, char* string, int lastpos, int *stringsize);
 
 //#endif
 
@@ -188,14 +250,20 @@ int strcoll(const char *s1, const char *s2);
 */
 
 
+void exit(int status);
+void abort(void);
+
 void setCursorPos(unsigned char x, unsigned char y);
-char getchar(void);
+int getchar(void);
 char waitforchar(void);
 int readstring(char *s, int minlength, int maxlength);
 int readstringc(char *s, int minlength, int maxlength);
 size_t strlen(const char *s);
 char *strcat(char *dest, const char *src);
+char *strncat(char *dest, const char *src, size_t n);
 char *strcpy(char *dest, const char *src);
+char *strncpy(char *dest, const char *src, size_t n);
+
 volatile void* copymem(volatile void *dest, volatile const void *src, size_t size);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
@@ -203,9 +271,12 @@ int memcmp(const void *s1, const void *s2, size_t n);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
 char *strstr(const char *haystack, const char *needle);
+size_t strcspn(const char *s, const char *reject);
 
 char *strpbrk(const char *s, const char *accept);
 double strtod(const char *nptr, char **endptr);
+
+void *memchr(const void *s, int c, size_t n);
 
 unsigned int getAPICID(void);
 unsigned int generateCRC(unsigned char *ptr, int size);
@@ -217,6 +288,7 @@ int vbuildstring(char *str, int size, char *string, __builtin_va_list arglist);
 
 
 
+
 void sendDissectedFlags(PRFLAGS rflags);
 
 
@@ -224,6 +296,8 @@ void csEnter(PcriticalSection CS);
 void csLeave(PcriticalSection CS);
 
 int spinlock(volatile int *CS); //returns 0
+
+void lockedQwordIncrement(volatile QWORD *address, QWORD inccount);
 
 void resync(void);
 
@@ -318,7 +392,7 @@ typedef volatile struct _PTE_PAE
         unsigned A1        :  1; // available 1 aka copy-on-write
         unsigned A2        :  1; // available 2/ is 1 when paged to disk
         unsigned A3        :  1; // available 3
-        unsigned PFN       : 24; // page-frame number
+        unsigned PFN       : 28; // page-frame number
         unsigned reserved  : 23;
         unsigned EXB       :  1;
 } __attribute__((__packed__)) _PTE_PAE, *PPTE_PAE;
@@ -362,7 +436,6 @@ typedef volatile struct _PDE2MB_PAE
         unsigned EXB       :  1;
 } __attribute__((__packed__)) _PDE2MB_PAE, *PPDE2MB_PAE;
 
-
 typedef volatile struct _PDPTE_PAE
 {
         unsigned P         :  1; // 0: present (1 = present)
@@ -378,6 +451,40 @@ typedef volatile struct _PDPTE_PAE
         unsigned reserved3 : 23;
         unsigned EXB       :  1;
 } __attribute__((__packed__)) *PPDPTE_PAE;
+
+typedef struct _PPDPTE_PAE_BS
+{
+        unsigned P         :  1; // present (1 = present)
+        unsigned RW        :  1; // Read Write
+        unsigned US        :  1; // User supervisor
+        unsigned PWT       :  1; // page-level write-through
+        unsigned PCD       :  1; // page-level cache disabled
+        unsigned A         :  1;
+        unsigned D         :  1;
+        unsigned PS        :  1;
+        unsigned G         :  1;
+        unsigned A1        :  1; // available 1 aka copy-on-write
+        unsigned A2        :  1; // available 2/ is 1 when paged to disk
+        unsigned A3        :  1; // available 3
+        unsigned PFN       : 24; // page-frame number
+        unsigned reserved3 : 28;
+} __attribute__((__packed__)) *PPDPTE_PAE_BS;
+
+typedef volatile struct _PPML4
+{
+        unsigned P         :  1; // 0: present (1 = present)
+        unsigned RW        :  1; // 1: Read Write
+        unsigned US        :  1; // 2: User supervisor
+        unsigned PWT       :  1; // 3: page-level write-through
+        unsigned PCD       :  1; // 4: page-level cache disabled
+        unsigned reserved2 :  4; // 5-8: reserved
+        unsigned A1        :  1; // 9: available 1 aka copy-on-write
+        unsigned A2        :  1; // 10: available 2/ is 1 when paged to disk
+        unsigned A3        :  1; // 11: available 3
+        unsigned PFN       : 28; // page-frame number
+        unsigned reserved3 : 23;
+        unsigned EXB       :  1;
+} __attribute__((__packed__)) *PPML4;
 
 
 typedef struct _TSS
@@ -512,6 +619,18 @@ typedef struct _INVPCIDDESCRIPTOR
   QWORD LinearAddress;
 } __attribute__((__packed__)) INVPCIDDESCRIPTOR, *PINVPCIDDESCRIPTOR;
 
+typedef struct _INVEPTDESCRIPTOR
+{
+  QWORD EPTPointer;
+  QWORD Zero;
+} __attribute__((__packed__)) INVEPTDESCRIPTOR, *PINVEPTDESCRIPTOR;
+
+typedef struct _INVVPIDDESCRIPTOR
+{
+  unsigned VPID:12;
+  QWORD zero:52;
+  QWORD LinearAddress;
+} __attribute__((__packed__)) INVVPIDDESCRIPTOR, *PINVVPIDDESCRIPTOR;
 
 /* obsolete, use rflags now
 typedef struct tagEFLAGS
@@ -550,7 +669,8 @@ typedef int (*POPCNT_IMPLEMENTATION)(QWORD val);
 extern POPCNT_IMPLEMENTATION popcnt;
 
 extern int getcpunr();
-extern int call32bit(DWORD address);
+int call32bit(DWORD address);
+extern int call32bita(DWORD address, DWORD stackaddress);
 
 #if DISPLAYDEBUG
 void initialize_displaydebuglogs();
@@ -567,5 +687,9 @@ GDT_ENTRY Build32BitCodeSegmentDescriptor(DWORD baseaddress, DWORD size);
 int getCPUCount();
 
 void InitCommon();
+
+#include <asm-generic/errno-base.h>
+int errno; //todo: implement this
+
 
 #endif

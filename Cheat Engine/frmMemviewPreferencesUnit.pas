@@ -7,7 +7,13 @@ interface
 uses
   Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs,
   StdCtrls, Menus, ExtCtrls, disassemblerviewunit, disassemblerviewlinesunit,
-  windows;
+  LCLIntf, LCLType,
+  {$ifdef darwin}
+  macport, math
+  {$endif}
+  {$ifdef windows}
+  windows
+  {$endif};
 
 type
 
@@ -21,7 +27,9 @@ type
     Button3: TButton;
     cbColorGroup: TComboBox;
     cbShowStatusBar: TCheckBox;
+    cbOriginalRenderingSystem: TCheckBox;
     ColorDialog1: TColorDialog;
+    cbFontQuality: TComboBox;
     edtSpaceAboveLines: TEdit;
     edtSpaceBelowLines: TEdit;
     edtHexSpaceBetweenLines: TEdit;
@@ -36,6 +44,7 @@ type
     GroupBox4: TGroupBox;
     GroupBox5: TGroupBox;
     GroupBox6: TGroupBox;
+    Label1: TLabel;
     Label2: TLabel;
     Label3: TLabel;
     Label4: TLabel;
@@ -63,6 +72,7 @@ type
     procedure btnHexFontClick(Sender: TObject);
     procedure Button2Click(Sender: TObject);
     procedure cbColorGroupChange(Sender: TObject);
+    procedure cbFontQualitySelect(Sender: TObject);
     procedure FormCreate(Sender: TObject);
     procedure FormShow(Sender: TObject);
     procedure GroupBox1Click(Sender: TObject);
@@ -191,13 +201,19 @@ begin
   cbColorGroup.Items.Add(rsDCUltimap2);
   cbColorGroup.Items.Add(rsDCHighlightedUltimap2);
   cbColorGroup.Items.Add(rsDCHighlightedUltimap2Secondary);
+
+  {$ifdef USELAZFREETYPE}
+  cbOriginalRenderingSystem.Visible:=true;
+  {$endif}
 end;
 
 procedure TfrmMemviewPreferences.FormShow(Sender: TObject);
 var
   i: integer;
   extrasize: integer;
+  {$ifdef windows}
   cbi: TComboboxInfo;
+  {$endif}
 begin
   applyfont;
 
@@ -205,10 +221,12 @@ begin
   cbColorGroupChange(cbColorGroup);
 
   //
+  {$ifdef windows}
   cbi.cbSize:=sizeof(cbi);
   if GetComboBoxInfo(cbColorGroup.handle, @cbi) then
     extrasize:=cbi.rcButton.Right-cbi.rcButton.Left+cbi.rcItem.Left
   else
+  {$endif}
     extrasize:=16;
 
   i:=Canvas.TextWidth(rsDCNormal)+extrasize;
@@ -413,6 +431,17 @@ begin
     lblHex.Font.color:=colors[oldstate].hexcolor;
   end;
 end;
+
+procedure TfrmMemviewPreferences.cbFontQualitySelect(Sender: TObject);
+begin
+  if cbFontQuality.ItemIndex<>-1 then
+  begin
+    fontdialog2.Font.quality:=TFontQuality(cbFontQuality.ItemIndex);
+    applyfont;
+  end;
+
+end;
+
 
 initialization
   {$I frmMemviewPreferencesUnit.lrs}

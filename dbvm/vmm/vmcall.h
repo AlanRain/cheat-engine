@@ -77,8 +77,30 @@
 //#define VMCALL_DISABLE_EPT 58 dus nut wurk
 
 
+#ifdef STATISTICS
+#define VMCALL_GET_STATISTICS 59
+#endif
+
+#define VMCALL_WATCH_EXECUTES 60
+#define VMCALL_SETTSCADJUST   61
+#define VMCALL_SETSPEEDHACK   62
+#define VMCALL_CAUSEDDEBUGBREAK 63
+
+#define VMCALL_DISABLE_TSCADJUST 64
+
+#define VMCALL_CLOAKEX_ACTIVATE 65
+
+#define VMCALL_DISABLETSCHOOK 66
+#define VMCALL_ENABLETSCHOOK 67
+
+
+
+#define VMCALL_KERNELMODE 100
+#define VMCALL_USERMODE 101
+
 
 extern int hasEPTsupport;
+extern int hasNPsupport;
 
 
 

@@ -3,15 +3,23 @@ unit DotNetPipe;
 {$mode objfpc}{$H+}
 
 interface
-{$ifdef windows}
-uses
-  jwawindows, windows, Classes, SysUtils, CEFuncProc, syncobjs, NewKernelHandler, Globals, maps;
-{$endif}
 
-{$ifdef unix}
+{$ifdef jni}
 //mainly for some defines for easy compilation
 uses unixporthelper, Unix, Classes, SysUtils, syncobjs, NewKernelHandler, Globals;
+
+{$else}
+uses
+  {$ifdef darwin}
+  macport, mactypes,
+  {$endif}
+  {$ifdef windows}
+  jwawindows, windows,
+  {$endif}
+  Classes, SysUtils, CEFuncProc, syncobjs, NewKernelHandler, Globals, maps;
 {$endif}
+
+
 
 
 
@@ -447,7 +455,7 @@ var
   _windir: pchar;
   windir: string;
 begin
-{$ifndef unix}
+{$ifdef windows}
   if fconnected=false then
   begin
     setlength(modules,0);
@@ -617,7 +625,7 @@ function TDotNetPipe.Connect(processid: dword; is64bit: boolean; timeout:dword=1
 {
 Connects to a dotnet data collector and tells it to open a specific process
 }
-{$ifndef unix}
+{$ifdef windows}
 var
   starttime: qword;
 
@@ -637,7 +645,7 @@ var
   me32: TModuleEntry32;
 {$endif}
 begin
-  {$IFNDEF UNIX}
+  {$IFDEF windows}
   if fConnected then
     disconnect;
 
@@ -731,7 +739,7 @@ var
   end;
   x: dword;
 begin
-  {$IFNDEF UNIX}
+  {$IFDEF windows}
   if fConnected then
   begin
     msg.command:=CMD_CLOSEPROCESSANDQUIT;

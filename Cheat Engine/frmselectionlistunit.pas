@@ -53,6 +53,8 @@ function ShowSelectionList(owner: TComponent; title, caption: string; list: TStr
 
 implementation
 
+uses math;
+
 function ShowSelectionList(owner: TComponent; title, caption: string; list: TStrings; var output: string; AllowCustomInput: boolean=false; SelectionToText: TSelectionToTextEvent=nil): integer;
 var sl: TfrmSelectionList;
 begin
@@ -96,6 +98,8 @@ begin
     originallist:=tstringlist.Create;
     originallist.AddStrings(functionlist);
   end;
+
+  clientwidth:=max(clientwidth, canvas.TextWidth('XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'));
 end;
 
 
@@ -152,6 +156,9 @@ procedure TfrmSelectionList.FormShow(Sender: TObject);
 begin
   if fsearchbox then
     edit1.SetFocus;
+
+  if listbox1.height<listbox1.ItemHeight*4 then
+    height:=height+(listbox1.ItemHeight*4)-listbox1.height;
 end;
 
 procedure TfrmSelectionList.Edit1Change(Sender: TObject);

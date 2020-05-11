@@ -3,6 +3,7 @@
 #include <ntddk.h>
 #include <windef.h>
 #include "vmxhelper.h"
+#include "DBKFunc.h"
 
 #ifdef AMD64
 extern UINT_PTR dovmcall_intel(void *vmcallinfo, unsigned int level1pass);
@@ -746,6 +747,24 @@ unsigned int vmx_add_memory(UINT64 *list, int count)
 	ExFreePool(vmcallinfo);
 	return r;
 	
+}
+
+int vmx_causedCurrentDebugBreak()
+{
+#pragma pack(1)
+	struct
+	{
+		unsigned int structsize;
+		unsigned int level2pass;
+		unsigned int command;
+	} vmcallinfo;
+#pragma pack()
+
+	vmcallinfo.structsize = sizeof(vmcallinfo);
+	vmcallinfo.level2pass = vmx_password2;
+	vmcallinfo.command = VMCALL_CAUSEDDEBUGBREAK;
+
+	return (int)dovmcall(&vmcallinfo, vmx_password1);
 }
 
 void vmx_init_dovmcall(int isIntel)

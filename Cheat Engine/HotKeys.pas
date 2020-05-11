@@ -5,7 +5,13 @@ unit HotKeys;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport, LCLType, math, machotkeys,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, Buttons, registry, CEFuncProc, ExtCtrls, LResources,
   comCtrls, menus, hotkeyhandler, MemoryRecordUnit, commonTypeDefs, strutils;
 
@@ -30,6 +36,7 @@ type
     edtDescription: TEdit;
     edtFreezeValue: TEdit;
     edtHotkey: TEdit;
+    schImageList: TImageList;
     Label1: TLabel;
     Label2: TLabel;
     lblActivateSound: TLabel;
@@ -94,7 +101,7 @@ type
 
 implementation
 
-uses MainUnit, trainergenerator, luafile, LuaHandler, DPIHelper;
+uses MainUnit, {$ifdef windows}trainergenerator,{$endif} luafile, LuaHandler, DPIHelper;
 
 resourcestring
   rsHotkeyID = 'Hotkey ID=%s';
@@ -111,7 +118,7 @@ resourcestring
   rsIncreaseValueWith = 'Increase value with:';
   rsSpeakText = 'Speak Text';
 
-  rsTextToSpeechHint = 'The text to speak'#13#10'%s = The description field of the memory record'#13#10'%s = The description of the hotkey';
+  rsTextToSpeechHint = 'The text to speak'#13#10'{Description} = The description of the hotkey'#13#10'{MRDescription} = The description field of the memory record'#13#10'{MRValue} = The value of the memory record';
   rsDefaultActivated = '%s Activated';
   rsDefaultDeactivated = '%s Deactivated';
 
@@ -338,9 +345,12 @@ begin
     hk.action:=getHotkeyAction;
     hk.value:=edtFreezeValue.text;
     hk.fdescription:=edtDescription.text;
+    hk.registerkeys;
   end
   else
     hk:=memrec.Addhotkey(keys, getHotkeyAction, edtFreezeValue.text, edtDescription.text );
+
+
 
   if cbActivateSound.ItemIndex=cbActivateSound.items.count-1 then
   begin
@@ -453,10 +463,43 @@ begin
   cbFreezedirectionSelect(cbFreezedirection);
 end;
 
+function isModifier(k: word): boolean;
+begin
+  result:=false;
+  case k of
+    vk_lwin, vk_rwin, vk_shift,vk_lshift,
+    vk_rshift, VK_CAPITAL, VK_MENU, vk_LMENU,
+    vk_RMENU, VK_CONTROL, VK_LCONTROL, VK_RCONTROL:
+      result:=true;
+
+  end;
+end;
+
 procedure THotKeyForm.edtHotkeyKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
-var i: integer;
+var
+  i: integer;
 begin
+  {$ifdef darwin}
+
+  if not isModifier(key) then
+  begin
+    //there can be only one non-modifier
+    for i:=0 to 4 do
+    begin
+      if keys[i]=0 then break;
+
+      if not isModifier(keys[i]) then
+      begin
+        key:=0; //do not add
+        break;
+      end;
+    end;
+  end;
+  {$endif}
+
+
+
   if keys[4]=0 then
   begin
     for i:=0 to 4 do
@@ -497,12 +540,28 @@ end;
 
 
 procedure THotKeyForm.FormCreate(Sender: TObject);
+var lblLimiteHotkeySupport: tlabel;
 begin
-  edtActivateText.Hint:=format(rsTextToSpeechHint, ['{MRDescription}','{Description}']); //make it easier for translators
+  {$ifdef darwin}
+  if loadHotkeyFunctions=false then
+  begin
+    lblLimiteHotkeySupport:=tlabel.create(self);
+    lblLimiteHotkeySupport.caption:='Limited hotkey support. No character keys supported';
+    lblLimiteHotkeySupport.font.color:=clRed;
+    lblLimiteHotkeySupport.align:=alBottom;
+    lblLimiteHotkeySupport.parent:=self;
+   end;
+  {$endif}
+
+
+  edtActivateText.Hint:=rsTextToSpeechHint; //make it easier for translators
   edtDeactivateText.Hint:=edtActivateText.Hint;
 
   edtActivateText.Text:=format(rsDefaultActivated, ['{MRDescription}']);
   edtDeactivateText.Text:=format(rsDefaultDeactivated, ['{MRDescription}']);
+
+  edtActivateText.ShowHint:=true;
+  edtDeactivateText.ShowHint:=true;
 
 
   pagecontrol1.ActivePage:=tabsheet1;
@@ -530,18 +589,28 @@ begin
   cbActivateSound.Items.add('');
   cbDeactivateSound.Items.add('');
 
+  {$ifdef windows}
   FillSoundList(cbActivateSound.Items);
   FillSoundList(cbDeactivateSound.Items);
 
+
   cbActivateSound.Items.Add(rsSpeakText);
   cbDeactivateSound.Items.Add(rsSpeakText);
+  {$else}
+  cbActivateSound.Enabled:=false;
+  cbDeactivateSound.Enabled:=false;
+  sbPlayActivate.enabled:=false;
+  sbPlayDeactivate.enabled:=false;
+  {$endif}
 end;
 
 procedure THotKeyForm.FormShow(Sender: TObject);
 var
   i, maxwidth: integer;
   s: string;
+  {$ifdef windows}
   cbi: TComboboxInfo;
+  {$endif}
 begin
   PageControl1.PageIndex:=1;
 
@@ -562,6 +631,7 @@ begin
     maxwidth:=max(maxwidth, Canvas.TextWidth(s));
   end;
 
+  {$ifdef windows}
   cbi.cbSize:=sizeof(cbi);
   if GetComboBoxInfo(cbFreezedirection.Handle, @cbi) then
   begin
@@ -570,6 +640,7 @@ begin
     cbFreezedirection.width:=cbFreezedirection.width+i;
   end
   else
+  {$endif}
     cbFreezedirection.width:=maxwidth+16;
 
   maxwidth:=0;
@@ -582,6 +653,7 @@ begin
   maxwidth:=max(maxwidth, canvas.TextWidth(edtActivateText.Text));
 
 
+  {$ifdef windows}
   cbi.cbSize:=sizeof(cbi);
   if GetComboBoxInfo(cbActivateSound.Handle, @cbi) then
   begin
@@ -590,6 +662,7 @@ begin
     cbActivateSound.width:=cbActivateSound.width+i;
   end
   else
+  {$endif}
     cbActivateSound.width:=maxwidth+16;
 
   if cbFreezedirection.width>edtHotkey.Width then
@@ -667,8 +740,10 @@ begin
     oldactivate:=cbActivateSound.text;
     olddeactivate:=cbDeactivateSound.Text;
 
+    {$ifdef windows}
     FillSoundList(cbActivateSound.Items);
     FillSoundList(cbDeactivateSound.Items);
+    {$endif}
 
     cbActivateSound.Items.Add(rsSpeakText);
     cbDeactivateSound.Items.Add(rsSpeakText);

@@ -10,9 +10,9 @@ interface
 
 uses
   LCLIntf, LCLType, Classes, SysUtils, controls, stdctrls, comctrls, ExtCtrls, graphics,
-  math, MemoryRecordUnit, FPCanvas, cefuncproc, newkernelhandler, menus,dom,
+  math, MemoryRecordUnit, FPCanvas, CEFuncProc, NewKernelHandler, menus,dom,
   XMLRead,XMLWrite, symbolhandler, AddresslistEditor, inputboxtopunit,
-  frmMemrecComboboxUnit, commonTypeDefs, multilineinputqueryunit, LazUTF8;
+  frmMemrecComboboxUnit, commonTypeDefs, multilineinputqueryunit, LazUTF8, StringHashList;
 
 type
   TTreeviewWithScroll=class(TTreeview)
@@ -36,6 +36,8 @@ type
     lastSelected: integer;
 
     header: THeaderControl;
+    headerpopup: TPopupMenu;
+    miSortOnClick: TMenuItem;
     Treeview: TTreeviewWithScroll; //TTreeview;//WithScroll;
     CurrentlyDraggedOverNode: TTreenode;
     CurrentlyDraggedOverBefore: boolean; //set to true if inserting before
@@ -69,6 +71,11 @@ type
 
     animationtimer: TTimer;
     expandsignsize: integer;
+
+    sortlevel0only: boolean;
+
+    descriptionhashlist: TStringhashList;
+
     procedure doAnimation(sender: TObject);
 
     function getTreeNodes: TTreenodes;
@@ -113,23 +120,26 @@ type
 
     function CheatTableNodeHasOnlyAutoAssemblerScripts(CheatTable: TDOMNode): boolean; //helperfunction
 
-    function activecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function descriptioncompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function addresscompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function valuetypecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function valuecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    procedure sort(firstnode: ttreenode; compareRoutine: TCompareRoutine; direction: boolean);
+
+    procedure sort(firstnode: ttreenode; compareRoutine: TTreeNodeCompare; direction: boolean);
     procedure SymbolsLoaded(sender: TObject);
+    procedure miSortOnClickClick(sender: TObject);
   public
     //needsToReinterpret: boolean;
+    procedure MemrecDescriptionChange(memrec: TMemoryRecord; olddescription, newdescription: string);
     procedure getAddressList(list: Tstrings);
 
     function focused:boolean; override;
 
+    function activecompare(_a: TTreenode; _b: TTreenode): integer;
     procedure sortByActive;
+    function descriptioncompare(_a: TTreenode; _b: TTreenode): integer;
     procedure sortByDescription;
+    function addresscompare(_a: TTreenode; _b: TTreenode): integer;
     procedure sortByAddress;
+    function valuetypecompare(_a: TTreenode; _b: TTreenode): integer;
     procedure sortByValueType;
+    function valuecompare(_a: TTreenode; _b: TTreenode): integer;
     procedure sortByValue;
 
     procedure RefreshCustomTypes;
@@ -144,9 +154,9 @@ type
     procedure DeleteSelected(ask: boolean=true);
     procedure ActivateSelected(FreezeType: TFreezeType=ftFrozen); //activates all selected entries in the addresslist
     procedure DeactivateSelected;
-    procedure CreateGroup(groupname: string);
+    procedure CreateGroup(groupname: string; withAddress: boolean=false);
     procedure addAutoAssembleScript(script: string);
-    function addAddressManually(initialaddress: string=''; vartype: TVariableType=vtDword): TMemoryRecord;
+    function addAddressManually(initialaddress: string=''; vartype: TVariableType=vtDword; CustomTypeName: string=''): TMemoryRecord;
     function addaddress(description: string; address: string; const offsets: array of integer; offsetcount: integer; vartype: TVariableType; customtypename: string=''; length: integer=0; startbit: integer=0; unicode: boolean=false; node: TTreenode=nil; attachmode: TNodeAttachMode=naAdd): TMemoryRecord;
     function getRecordWithDescription(description: string): TMemoryRecord;
     function getRecordWithID(id: integer): TMemoryRecord;
@@ -202,8 +212,8 @@ type
 
 implementation
 
-uses dialogs, formAddressChangeUnit, TypePopup, PasteTableentryFRM, mainunit,
-  ProcessHandlerUnit, frmEditHistoryUnit, globals, filehandler;
+uses dialogs, formAddressChangeUnit, TypePopup, PasteTableentryFRM, MainUnit,
+  ProcessHandlerUnit, frmEditHistoryUnit, globals, Filehandler, ceregistry;
 
 resourcestring
   rsDoYouWantToDeleteTheSelectedAddress = 'Do you want to delete the selected address?';
@@ -224,6 +234,7 @@ resourcestring
   rsALAddAddress = 'Add address';
   rsALNoDescription = 'No description';
   rsALAutoAssembleScritp = 'Auto Assemble script';
+  rsSortOnClick = 'Sort on click';
 
 procedure TTreeviewWithScroll.MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
 var
@@ -248,15 +259,25 @@ begin
 end;
 
 procedure TAddresslist.clear;
-var i: integer;
+var
+  i: integer;
+  item: TMemoryRecord;
 begin
   //first check if it's being edited/or busy
+  if self=nil then exit;
+
   for i:=0 to count-1 do
     if (MemRecItems[i].isBeingEdited) or (memrecitems[i].AsyncProcessing) then exit;
 
   //still here so nothing is being edited, so, delete
+  descriptionhashlist.clear;
+
   while count>0 do
-     MemRecItems[0].Free;
+  begin
+    item:=MemRecItems[0];
+    if item<>nil then
+      item.Free;
+  end;
 end;
 
 procedure TAddresslist.RefreshCustomTypes;
@@ -358,7 +379,10 @@ end;
 
 function TAddresslist.GetMemRecItemByIndex(i: integer): TMemoryRecord;
 begin
-  result:=TMemoryRecord(treeview.items[i].data);
+  if i<treeview.Items.Count then
+    result:=TMemoryRecord(treeview.items[i].data)
+  else
+    result:=nil;
 end;
 
 procedure TAddresslist.ActivateSelected(FreezeType: TFreezeType=ftFrozen);
@@ -380,9 +404,13 @@ end;
 procedure TAddresslist.DeactivateSelected;
 var i: integer;
 begin
-  for i:=0 to count-1 do
+  i:=0;
+  while i<count do
+  begin
     if memrecitems[i].isSelected then
       memrecitems[i].active:=false;    //this will also reset the allow* booleans
+    i:=i+1
+  end;
 end;
 
 
@@ -438,17 +466,23 @@ var
   i: integer;
   oldlogWrites: boolean;
 begin
-  oldlogWrites:=logwrites;
+  if GetCurrentThreadId=MainThreadID then
+  begin
+    oldlogWrites:=logwrites;
 
-  //oldlogWrites:=false;
-  blockfilehandlerpopup:=true;
+    //oldlogWrites:=false;
+    blockfilehandlerpopup:=true;
+  end;
 
   try
     for i:=0 to count-1 do
       memrecitems[i].ApplyFreeze;
   finally
-    logWrites:=oldlogWrites;
-    blockfilehandlerpopup:=false;
+    if GetCurrentThreadId=MainThreadID then
+    begin
+      logWrites:=oldlogWrites;
+      blockfilehandlerpopup:=false;
+    end;
   end;
 end;
 
@@ -474,6 +508,7 @@ var currentEntry: TDOMNode;
 memrec: TMemoryRecord;
 i: integer;
 begin
+
   currentEntry:=CheatEntries.FirstChild;
   while currententry<>nil do
   begin
@@ -499,15 +534,12 @@ var
   doc: TXMLDocument;
   cheattable,CheatEntries: TDOMNode;
   i: integer;
-
-  s: TStringstream;
-
-
+  ms: TMemoryStream;
 begin
   result:='';
   doc:=TXMLDocument.Create;
-  s:=TStringstream.create('');
 
+  ms:=TMemorystream.Create;
 
   cheattable:=doc.CreateElement('CheatTable');
   doc.AppendChild(cheattable);
@@ -517,11 +549,15 @@ begin
 
   try
     saveTableXMLToNode(CheatEntries, selectedOnly);
-    WriteXMLFile(doc,s);
-    result:=s.DataString;
+    WriteXMLFile(doc,ms);
+    ms.WriteByte(0);
+
+    ms.Position:=0;
+
+    result:=pchar(ms.Memory); //s.UnicodeDataString;
   finally
     doc.free;
-    s.free;
+    ms.free;
   end;
 end;
 
@@ -563,7 +599,7 @@ var doc: TXMLDocument;
 
     currentEntry: TDOMNode;
 
-    s: TStringStream;
+    s: TMemoryStream;
 
     replace_find: string;
     replace_with: string;
@@ -571,11 +607,17 @@ var doc: TXMLDocument;
     changeoffset: ptrUint;
     x: ptrUint;
     i: integer;
+    childrenaswell: boolean;
+
+
 begin
   doc:=nil;
   s:=nil;
 
-  s:=TStringstream.Create(xml);
+  s:=TMemoryStream.Create;
+  s.WriteBuffer(xml[1],length(xml));
+  s.position:=0;
+
 
   try
     try
@@ -611,6 +653,7 @@ begin
                 changeoffset:=0;
               end;
 
+              childrenaswell:=frmPasteTableentry.cbChildrenAsWell.Checked;
             finally
               freeandnil(frmPasteTableentry);
             end;
@@ -636,23 +679,10 @@ begin
 
 
               if replace_find<>'' then
-                memrec.Description:=stringreplace(memrec.Description,replace_find,replace_with,[rfReplaceAll,rfIgnoreCase]);
+                memrec.replaceDescription(replace_find, replace_with, childrenaswell);
 
               if changeoffset<>0 then
-              begin
-                if memrec.interpretableaddress<>'' then //always true
-                begin
-                  try
-                    x:=symhandler.getAddressFromName(memrec.interpretableaddress);
-                    x:=x+changeoffset;
-                    memrec.interpretableaddress:=symhandler.getNameFromAddress(x,true,true)
-                  except
-                    memrec.interpretableaddress:=inttohex(memrec.getBaseAddress+changeoffset,8);
-                  end;
-
-                  memrec.ReinterpretAddress;
-                end;
-              end;
+                memrec.adjustAddressBy(changeoffset, childrenaswell);
             end;
             currentEntry:=currentEntry.NextSibling;
           end;
@@ -676,17 +706,25 @@ begin
 
 end;
 
-procedure TAddresslist.CreateGroup(groupname: string);
+procedure TAddresslist.CreateGroup(groupname: string; withAddress: boolean=false);
 var
   memrec: TMemoryRecord;
+  n: TTreenode;
 begin
+
   memrec:=TMemoryrecord.Create(self);
   memrec.id:=GetUniqueMemrecId;
   memrec.isGroupHeader:=true;
+  memrec.isAddressGroupHeader:=withAddress;
   memrec.Description:=groupname;
-  memrec.treenode:=Treeview.Items.AddObject(nil,'',memrec);
-  memrec.treenode.DropTarget:=true;
 
+  if SelectedRecord<>nil then
+    memrec.treenode:=Treeview.Items.InsertObjectBehind(SelectedRecord.treenode,'', memrec)
+  else
+    memrec.treenode:=Treeview.Items.AddObject(nil,'',memrec);
+
+
+  memrec.treenode.DropTarget:=true;
   MainForm.editedsincelastsave:=true;
 end;
 
@@ -731,27 +769,30 @@ begin
 
 end;
 
-function TAddresslist.getRecordWithDescription(description: string): TMemoryRecord;
-var i: integer;
+procedure TAddresslist.MemrecDescriptionChange(memrec: TMemoryRecord; olddescription, newdescription: string);
 begin
-  result:=nil;
-  for i:=0 to count-1 do
-    if uppercase(MemRecItems[i].Description)=uppercase(description) then
-    begin
-      result:=MemRecItems[i];
-      exit;
-    end;
+  if olddescription<>'' then
+    descriptionhashlist.Remove(olddescription);
 
+  if newdescription<>'' then
+    descriptionhashlist[newdescription]:=memrec;
 end;
 
-function TAddresslist.addAddressManually(initialaddress: string=''; vartype: TVariableType=vtDword): TMemoryRecord;
+function TAddresslist.getRecordWithDescription(description: string): TMemoryRecord;
+begin
+  result:=descriptionhashlist.Data[description]
+end;
+
+function TAddresslist.addAddressManually(initialaddress: string=''; vartype: TVariableType=vtDword; CustomTypeName: string=''): TMemoryRecord;
 var mr: TMemoryRecord;
+    edited: boolean;
 begin
   result:=nil;
+  edited:=mainform.editedsincelastsave;
 
 
   Treeview.BeginUpdate;
-  mr:=addaddress(rsALNoDescription,initialaddress,[],0, vartype);
+  mr:=addaddress(rsALNoDescription,initialaddress,[],0, vartype, CustomTypeName);
   mr.visible:=false;
   Treeview.EndUpdate;
 
@@ -765,11 +806,13 @@ begin
     begin
       mr.free; //not ok, delete
       mr:=nil;
+      mainform.editedsincelastsave:=edited;
     end
     else
     begin
       mr.ReinterpretAddress(true);
       mr.visible:=true;
+      mainform.editedsincelastsave:=true;
     end;
 
     free;
@@ -777,7 +820,6 @@ begin
 
   //treeview.EndUpdate;
 
-  mainform.editedsincelastsave:=true;
 
   result:=mr;
 end;
@@ -939,7 +981,7 @@ procedure TAddresslist.addressdblclick(node: TTreenode);
 begin
   if assigned(fOnAddressChange) and fOnAddressChange(self,tmemoryrecord(treeview.selected.Data)) then exit;
 
-  if TMemoryRecord(node.data).isGroupHeader then exit;
+  if TMemoryRecord(node.data).isGroupHeader and not TMemoryRecord(node.data).isAddressGroupHeader then exit;
 
   with TFormaddresschange.Create(self) do
   begin
@@ -1054,9 +1096,6 @@ var
 
   frmMemrecCombobox: TfrmMemrecCombobox;
 begin
-
-
-
   if memrec.DropDownCount=0 then
   begin
     value:=AnsiToUtf8(memrec.value);
@@ -1075,7 +1114,11 @@ begin
     frmMemrecCombobox:=TfrmMemrecCombobox.Create(memrec);
     canceled:=frmMemrecCombobox.showmodal<>mrok;
 
-    value:=utf8toansi(frmMemrecCombobox.value);
+    if memrec.DropDownReadOnly and memrec.DropDownDescriptionOnly and memrec.DisplayAsDropDownListItem and (frmMemrecCombobox.value='*') then
+      canceled:=true;
+
+    if not canceled then
+      value:=utf8toansi(frmMemrecCombobox.value);
 
     frmMemrecCombobox.free;
   end;
@@ -1187,7 +1230,7 @@ var r: TMemoryRecord;
 begin
   AllowCollapse:=false;
   r:=TMemoryRecord(node.data);
-  if ((moHideChildren in r.options) and (not r.active)) or (moAllowManualCollapseAndExpand in r.options) then //if not active then allow collapse, or if it's allowed to collapse
+  if ((moHideChildren in r.options) and (not r.active)) or (moAllowManualCollapseAndExpand in r.options) or (moAlwaysHideChildren in r.options)  then //if not active then allow collapse, or if it's allowed to collapse
     AllowCollapse:=true;
 end;
 
@@ -1223,14 +1266,26 @@ begin
     for i:=0 to header.Sections.count-1 do
       if inrange(p.x,header.Sections[i].Left,header.Sections[i].right) then
       begin
+        //if GroupHeaderWithAddress do the description, address, value dblclick
+        if TMemoryRecord(node.data).isAddressGroupHeader then
+        begin
+          case i of
+            0: ; //frozen doubleclick
+            1: descriptiondblclick(node);
+            2: addressdblclick(node);
+            3: ; //typedblclick(node);
+            4: valuedblclick(node);
+          end;
+        end
+        else
         //if it's a auto assemble script only do the description and value
         if (TMemoryRecord(node.data).VarType=vtAutoAssembler) or (TMemoryRecord(node.data).isGroupHeader) then
         begin
           case i of
             0: ; //frozen doubleclick
             1: descriptiondblclick(node);
-            2: ; //valuedblclick(node);
-            3: ; //valuedblclick(node);
+            2: ; //addressdblclick(node);
+            3: ; //typedblclick(node);
             4: valuedblclick(node);
           end;
         end
@@ -1267,6 +1322,9 @@ var
   p: tpoint;
 begin
 //  self.Parent;
+
+
+
   p:=treeview.ScreenToClient(mouse.cursorpos);
   x:=p.x;
   y:=p.y;
@@ -1274,6 +1332,8 @@ begin
   node:=treeview.GetNodeAt(x,y);
   if node<>nil then
   begin
+    if button<>mbleft then exit;
+
     mr:=TMemoryRecord(node.data);
 
     textrect:=node.DisplayRect(true);
@@ -1381,78 +1441,48 @@ end;   }
 
 
 
-procedure TAddresslist.sort(firstnode: ttreenode; compareRoutine: TCompareRoutine; direction: boolean );
+procedure TAddresslist.sort(firstnode: ttreenode; compareRoutine: TTreeNodeCompare; direction: boolean );
 {
   sort from the first node till there is no more sibling
 }
 var
-  swapped: boolean;
-  lastnode: ttreenode;
   currentnode: ttreenode;
-  i,d: integer;
+  i: integer;
+  list: TList;
 
-  firstnodeindex: integer;
-
-  currentindex: integer;
+  basenode: TMemoryrecord;
 begin
+
   treeview.BeginUpdate;
   try
-    //first sort all the children
-    currentnode:=firstnode;
-    while currentnode<>nil do
+    if firstnode.level>0 then
     begin
-      if currentnode.HasChildren then
-        sort(currentnode.GetFirstChild, compareRoutine, direction);
-
-      currentnode:=currentnode.GetNextSibling;
-    end;
-
-    //all the children have been sorted, so now sort myself
-
-
-    if direction then
-      d:=1
+      sortlevel0only:=false;
+      firstnode.Parent.CustomSort(compareroutine)
+    end
     else
-      d:=-1;
-
-
-    firstnodeindex:=firstnode.absoluteindex;
-
-    swapped:=true;
-    while swapped do
     begin
-      firstnode:=treeview.items[firstnodeindex];
-
-      swapped:=false;
-      lastnode:=firstnode;
-      currentnode:=lastnode.GetNextSibling;
-      while currentnode<>nil do
-      begin
-        currentindex:=currentnode.AbsoluteIndex;
-        lastnode:=currentnode.GetPrevSibling;
-
-        if (compareRoutine(tmemoryrecord(lastnode.data), tmemoryrecord(currentnode.data))*d)<0 then
-        begin
-          currentnode.MoveTo(lastnode, naInsert); //move the current node in front of the previous node
-          swapped:=true;
-        end;
-
-        currentnode:=treeview.Items[currentindex];
-        currentnode:=currentnode.GetNextSibling;
-      end;
-
-
-
+      sortlevel0only:=true;
+      treeview.CustomSort(compareroutine);
+      //treeview.items.SortTopLevelNodes(compareroutine); //broken right now
     end;
+
+
 
   finally
     treeview.EndUpdate;
   end;
 end;
 
-function Taddresslist.activecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-var ra, rb: integer;
+function TAddresslist.activecompare(_a: TTreenode; _b: TTreenode): integer;
+var
+  ra, rb: integer;
+  a,b: TMemoryRecord;
 begin
+  if sortlevel0only and (_a.level<>0) and (_b.level<>0) then exit(0);
+
+  a:=TMemoryRecord(_a.data);
+  b:=TMemoryRecord(_b.data);
   if not a.active then ra:=0 else
     if a.allowdecrease then ra:=1 else
       if a.allowincrease then ra:=2 else
@@ -1463,85 +1493,146 @@ begin
       if b.allowincrease then rb:=2 else
         rb:=3;
 
-
-
   result:=rb-ra;
+
+  if not activesortdirection then
+    result:=-result;
 end;
 
 procedure TAddresslist.sortByActive;
 type TCompareState=(inactive, allowincrease, allowdecrease, active);
+var n: TTreenode;
 begin
+
   if count=0 then exit;
-  sort(treeview.items[0], activecompare, activesortdirection);
+
+  if treeview.Selected<>nil then n:=treeview.Selected else n:=treeview.Items[0];
+  sort(n, activecompare, activesortdirection);
   activesortdirection:=not activesortdirection;
 end;
 
-function Taddresslist.descriptioncompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function TAddresslist.descriptioncompare(_a: TTreenode; _b: TTreenode): integer;
+var
+  a,b: TMemoryRecord;
 begin
+  if sortlevel0only and (_a.level<>0) and (_b.level<>0) then exit(0);
+
+  a:=TMemoryRecord(_a.data);
+  b:=TMemoryRecord(_b.data);
   result:=0; //equal
   if b.description>a.description then
     result:=1;
   if b.description<a.description then
     result:=-1;
+
+  if not descriptionsortdirection then
+    result:=-result;
 end;
 
 procedure TAddresslist.sortByDescription;
+var n: TTreenode;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], descriptioncompare, descriptionsortdirection);
+
+  if treeview.Selected<>nil then n:=treeview.Selected else n:=treeview.Items[0];
+  sort(n, descriptioncompare, descriptionsortdirection);
   descriptionsortdirection:=not descriptionsortdirection;
 end;
 
-function Taddresslist.addresscompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function TAddresslist.addresscompare(_a: TTreenode; _b: TTreenode): integer;
+var
+  a,b: TMemoryRecord;
 begin
+  if sortlevel0only and (_a.level<>0) and (_b.level<>0) then exit(0);
+
+  a:=TMemoryRecord(_a.data);
+  b:=TMemoryRecord(_b.data);
   result:=b.getRealAddress-a.GetRealAddress;
+
+  if not addresssortdirection then
+    result:=-result;
 end;
 
 procedure TAddresslist.sortByAddress;
+var n: TTreenode;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], addresscompare, addresssortdirection);
+
+  if treeview.Selected<>nil then n:=treeview.Selected else n:=treeview.Items[0];
+  sort(n, addresscompare, addresssortdirection);
   addresssortdirection:=not addresssortdirection;
 end;
 
-function Taddresslist.valuetypecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function TAddresslist.valuetypecompare(_a: TTreenode; _b: TTreenode): integer;
+var
+  a,b: TMemoryRecord;
 begin
+  if sortlevel0only and (_a.level<>0) and (_b.level<>0) then exit(0);
+
+  a:=TMemoryRecord(_a.data);
+  b:=TMemoryRecord(_b.data);
   result:=integer(b.VarType)-integer(a.VarType);
+
+  if not valuetypesortdirection then
+    result:=-result;
 end;
 
 procedure TAddresslist.sortByValueType;
+var n: TTreenode;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], valuetypecompare, valuetypesortdirection );
+
+  if treeview.Selected<>nil then n:=treeview.Selected else n:=treeview.Items[0];
+  sort(n, valuetypecompare, valuetypesortdirection );
   valuetypesortdirection:=not valuetypesortdirection;
 end;
 
-function Taddresslist.valuecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-var va, vb: double;
-  oka,okb: boolean;
+function TAddresslist.valuecompare(_a: TTreenode; _b: TTreenode): integer;
+var
+  va, vb: double;
+  a,b: TMemoryRecord;
 begin
+  if sortlevel0only and (_a.level<>0) and (_b.level<>0) then exit(0);
+
+  a:=TMemoryRecord(_a.data);
+  b:=TMemoryRecord(_b.data);
   if not TryStrToFloat(a.value, va) then va:=0;
   if not TryStrToFloat(b.value, vb) then vb:=0;
-  result:=trunc(vb-va);
+
+  result:=0;
+  if vb>va then
+    result:=1;
+
+  if vb<va then
+    result:=-1;
+
+  if not valuesortdirection then
+    result:=-result;
 end;
 
 
 procedure TAddresslist.sortByValue;
+var n: TTreenode;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], valuecompare, valuesortdirection);
+
+  if treeview.Selected<>nil then n:=treeview.Selected else n:=treeview.Items[0];
+  sort(n, valuecompare, valuesortdirection);
   valuesortdirection:=not valuesortdirection;
 end;
 
 procedure TAddresslist.sectionClick(HeaderControl: TCustomHeaderControl; Section: THeaderSection);
 begin
-  //sort the addresslist based on the clicked section
-  case section.Index of
-    0: sortByActive;
-    1: sortByDescription;
-    2: sortByAddress;
-    3: sortByValueType;
-    4: sortByValue;
+  if miSortOnClick.checked then
+  begin
+    //sort the addresslist based on the clicked section
+    case section.Index of
+      0: sortByActive;
+      1: sortByDescription;
+      2: sortByAddress;
+      3: sortByValueType;
+      4: sortByValue;
+    end;
   end;
 end;
 
@@ -1809,6 +1900,8 @@ var
   r: single;
 
   bordersize: integer;
+
+  tempstring: string;
 begin
   //multiselect implementation
 
@@ -2064,7 +2157,7 @@ begin
     linetop:=textrect.Top+1; ;//+((textrect.Bottom-textrect.Top) div 2)-(sender.canvas.TextHeight('DDDD') div 2);
 
 
-    if (memrec.isGroupHeader=false) and (memrec.VarType<>vtAutoAssembler) then //if it's not a groupheader of auto assemble script then show the extra data
+    if (not memrec.isGroupHeader or memrec.isAddressGroupHeader) and (memrec.VarType<>vtAutoAssembler) then //if it's not a groupheader of auto assemble script then show the extra data
     begin
       //limit how far the texts go depending on the sections
       sender.Canvas.TextRect(rect(descriptionstart, textrect.Top, header.Sections[1].right, textrect.bottom), descriptionstart, linetop, memrec.description);
@@ -2076,43 +2169,55 @@ begin
         //address
         sender.Canvas.TextRect(rect(header.Sections[2].left, textrect.Top, header.Sections[2].right, textrect.bottom),header.Sections[2].Left, linetop, ansitoutf8(memrec.addressString));
 
-        //type
-        case memrec.vartype of
-          vtCustom: sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, memrec.CustomTypeName);
-          vtString:
-          begin
-            if not (memrec.Extra.stringData.unicode or memrec.Extra.stringData.codepage) then
-              sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType)+'['+inttostr(memrec.Extra.stringData.length)+']')
-            else if memrec.Extra.stringData.unicode then
-              sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(vtUnicodeString)+'['+inttostr(memrec.Extra.stringData.length)+']')
+        if not memrec.isGroupHeader then
+        begin
+          //type
+          case memrec.vartype of
+            vtCustom: sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, memrec.CustomTypeName);
+            vtString:
+            begin
+              if not (memrec.Extra.stringData.unicode or memrec.Extra.stringData.codepage) then
+                sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType)+'['+inttostr(memrec.Extra.stringData.length)+']')
+              else if memrec.Extra.stringData.unicode then
+                sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(vtUnicodeString)+'['+inttostr(memrec.Extra.stringData.length)+']')
+              else
+                sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(vtCodePageString)+'['+inttostr(memrec.Extra.stringData.length)+']');
+            end;
+            vtBinary:
+            begin
+              if memrec.Extra.bitData.bitlength=0 then
+                sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType)+':'+inttostr(memrec.Extra.bitData.Bit)+'->idiot')
+              else
+                sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType)+':'+inttostr(memrec.Extra.bitData.Bit)+'->'+inttostr(memrec.Extra.bitData.Bit+memrec.Extra.bitData.bitlength-1));
+            end
             else
-              sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(vtCodePageString)+'['+inttostr(memrec.Extra.stringData.length)+']');
+            begin
+
+              sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType));
+            end
           end;
-          vtBinary:
-          begin
-            if memrec.Extra.bitData.bitlength=0 then
-              sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType)+':'+inttostr(memrec.Extra.bitData.Bit)+'->idiot')
-            else
-              sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType)+':'+inttostr(memrec.Extra.bitData.Bit)+'->'+inttostr(memrec.Extra.bitData.Bit+memrec.Extra.bitData.bitlength-1));
-          end
-          else
-          begin
 
-            sender.Canvas.TextRect(rect(header.Sections[3].left, textrect.Top, header.Sections[3].right, textrect.bottom),header.sections[3].left, linetop, VariableTypeToTranslatedString(memrec.VarType));
-          end
+
+          //value
+          sender.Canvas.TextRect(rect(header.Sections[4].left, textrect.top, header.Sections[4].right, textrect.bottom),header.sections[4].left, linetop, memrec.DisplayValue);
         end;
-
-
-        //value
-        sender.Canvas.TextRect(rect(header.Sections[4].left, textrect.top, header.Sections[4].right, textrect.bottom),header.sections[4].left, linetop, memrec.DisplayValue);
       end;
     end
     else
     begin
-      sender.Canvas.TextOut(descriptionstart, textrect.Top, memrec.description); //no limit on how far
+      sender.Canvas.TextOut(descriptionstart, linetop, memrec.description); //no limit on how far
 
       if (memrec.VarType=vtAutoAssembler) then //give it the <script> text for value
-        sender.Canvas.TextRect(rect(header.Sections[4].left, textrect.Top, header.Sections[4].right, textrect.bottom), header.sections[4].left, linetop, rsScript);
+      begin
+        tempstring:=rsScript;
+        if assigned(memrec.OnGetDisplayValue) then
+        begin
+          if memrec.OnGetDisplayValue(memrec, tempstring) = false then
+            tempstring:=rsscript; //undo, it returned false
+        end;
+
+        sender.Canvas.TextRect(rect(header.Sections[4].left, textrect.Top, header.Sections[4].right, textrect.bottom), header.sections[4].left, linetop, tempstring);
+      end;
 
     end;
 
@@ -2176,13 +2281,21 @@ begin
   inherited DoAutoSize;
 end;
 
+procedure TAddresslist.miSortOnClickClick(Sender: TObject);
+begin
+  cereg.writeBool('Addresslist: sort on click', miSortOnClick.Checked);
+end;
+
 constructor TAddresslist.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
 
  // ShowHint:=true;
 
+  descriptionhashlist:=TStringHashList.Create(false);
+
   treeview:=TTreeviewWithScroll.create(self); //TTreeview.create(self);
+  treeview.name:='List';
 
   treeview.BorderStyle:=bsNone;
   treeview.BorderWidth:=0;;
@@ -2234,6 +2347,7 @@ begin
 
 
   header:=THeaderControl.Create(self);
+  header.name:='Header';
   header.parent:=self;
   header.Align:=alTop;
   header.Height:=header.font.GetTextHeight('D')+4;
@@ -2277,6 +2391,19 @@ begin
 
   header.OnSectionClick:=SectionClick;
   header.AutoSize:=true;
+
+
+  headerpopup:=TPopupmenu.Create(header);
+  miSortOnClick:=TMenuItem.Create(headerpopup);
+  miSortOnClick.Caption:=rsSortOnClick;
+  miSortOnClick.ShowAlwaysCheckable:=true;
+  miSortOnClick.Checked:=cereg.readBool('Addresslist: sort on click', true);
+  miSortOnClick.AutoCheck:=true;
+  miSortOnClick.OnClick:=miSortOnClickClick;
+  headerpopup.Items.Add(miSortOnClick);
+
+  header.PopupMenu:=headerpopup;
+
 
   treeview.ScrollBars:=ssVertical;
   treeview.Align:=alClient;

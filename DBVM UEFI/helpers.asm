@@ -20,6 +20,58 @@ brk:
   ret
 
 
+global timeCheck
+timeCheck:
+  ;rdi is a pointer to an array of 5 qwords
+  sub rsp,64+8
+  mov [rsp+0],r8
+  mov [rsp+0x08],r9
+  mov [rsp+0x10],r10
+  mov [rsp+0x18],r11
+  mov [rsp+0x20],r12
+
+
+  rdtsc
+  mov r8d,edx
+  shl r8,32
+  or r8d,eax
+
+  rdtsc
+  mov r9d,edx
+  shl r9,32
+  or r9d,eax
+
+  rdtsc
+  mov r10d,edx
+  shl r10,32
+  or r10d,eax
+
+  rdtsc
+  mov r11d,edx
+  shl r11,32
+  or r11d,eax
+
+  rdtsc
+  mov r12d,edx
+  shl r12,32
+  mov r12d,eax
+
+  mov [rdi],r8
+  mov [rdi+0x8],r9
+  mov [rdi+0x10],r10
+  mov [rdi+0x18],r11
+  mov [rdi+0x20],r12
+
+
+  mov r8,[rsp+0]
+  mov r9,[rsp+0x08]
+  mov r10,[rsp+0x10]
+  mov r11,[rsp+0x18]
+  mov r12,[rsp+0x20]
+
+  add rsp,64+8
+  ret
+
 global readMSR
 readMSR:
   xchg ecx,edi
@@ -27,6 +79,25 @@ readMSR:
   shl rdx,32
   add rax,rdx
   xchg ecx,edi
+  ret
+
+
+global writeMSR
+writeMSR:
+  xchg ecx,edi
+  mov eax,esi
+  mov rdx,rsi
+  shr rdx,32
+
+  wrmsr ;write edx:eax into ecx
+
+  xchg ecx,edi
+  ret
+
+
+global setCR0
+setCR0:
+  mov cr0,rdi
   ret
 
 global getCR0
@@ -218,10 +289,20 @@ getR15:
   mov rax,r15
   ret
 
+GLOBAL getTSC
+getTSC:
+  xor rax,rax
+  xor rdx,rdx
+  rdtsc
+  shl rdx,32
+  or rax,rdx
+
+  ret
+
 GLOBAL getAccessRights
 getAccessRights:
   xor rax,rax
-  lar rax,rdi
+  lar rax,di
   jnz getAccessRights_invalid
   shr rax,8
   and rax,0f0ffh
@@ -234,7 +315,7 @@ getAccessRights:
 GLOBAL getSegmentLimit
 getSegmentLimit:
   xor rax,rax
-  lsl rax,rdi
+  lsl rax,di
   ret
 
 
@@ -257,5 +338,104 @@ dovmcall:
   vmcall
   pop rdx
   ret
+
+GLOBAL dovmcall2
+dovmcall2:
+  push r8
+  push r9
+  mov r8,rdx
+  mov r9,rcx
+
+  mov rax,rdi
+  mov rdx,rsi
+  vmcall
+  mov [r8],rax
+  mov [r9],rdx
+  pop r9
+  pop r8
+  ret
+
+;extern UINT64 dovmcall(void *vmcallinfo, unsigned int level1pass);
+;extern void dovmcall2(void *vmcallinfo, unsigned int level1pass, QWORD *r1, QWORD *r2);
+                              ;rdi                     rsi           rdx           rcx
+
+
+
+%define SERIALPORT 0b070h
+
+GLOBAL SerialPort
+SerialPort:
+dd 0
+
+GLOBAL enableSerial
+enableSerial:
+mov dx,[rel SerialPort] ;3f9h
+add dx,1
+mov al,0h
+out dx,al
+
+mov dx,[rel SerialPort]; 3fbh
+add dx,3
+mov al,80h
+out dx ,al ;access baud rate generator
+
+mov dx,[rel SerialPort]; 3f8h
+mov al,1h  ;0c=9600 (1152000/divisor)
+out dx,al ;9600 baud
+
+mov dx,[rel SerialPort]; 3f9h
+add dx,1
+mov al,0h ;high part of devisor
+out dx,al ;
+
+mov dx,[rel SerialPort]; 3fbh
+add dx,3
+mov al,3h
+out dx,al ;8 bits, no parity, one stop
+ret
+
+
+
+GLOBAL waitforkeypress
+waitforkeypress:
+mov dx,[rel  SerialPort] ;0x3fd
+add dx,5
+waitforkeypress2:
+in al,dx
+and al,1
+cmp al,1
+jne waitforkeypress2
+mov dx,[rel SerialPort] ;0x3f8
+in al,dx
+ret
+
+
+GLOBAL sendchar32
+sendchar32:
+xor rax,rax
+push rcx
+mov rcx,0
+
+sendchar32loop:
+mov dx,[rel SerialPort] ;3fdh
+add dx,5
+in al,dx
+and al,0x20
+
+add rcx,1
+cmp rcx,100
+jae sendchar32loopbreak
+
+cmp al,0x20
+jne sendchar32loop
+
+sendchar32loopbreak:
+
+pop rcx
+
+mov dx,[rel SerialPort]; 0x3f8
+mov al,dil
+out dx,al
+ret
 
 

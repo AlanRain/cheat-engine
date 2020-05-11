@@ -37,7 +37,7 @@ var
 
 implementation
 
-uses Unit4, Unit8;
+uses Unit4, Unit8, frmHelpUnit;
 
 resourcestring
   rsWellDoneYouScrewedUpTheTutorial = 'Well done, you screwed up the tutorial!!!!';
@@ -84,6 +84,8 @@ resourcestring
     ''+#13#10+
     'extra:'+#13#10+
     'And you could also use the pointer scanner to find the pointer to this address';
+  rsDontFuckingFreezeThePointer = 'I''m sorry, but freezing the pointer is not'
+    +' really a functional solution';
 
 
 procedure TForm7.Button2Click(Sender: TObject);
@@ -128,12 +130,15 @@ var j: integer;
     k: integer;
 
     s: string;
+    oldp: pointer;
 begin
   button1.Anchors:=[akLeft];
   label2.anchors:=[akLeft];
 
   button3.visible:=false;
   button3.repaint;
+
+  oldp:=i;
 
   getmem(i,4); //don't free else it's too easy
   i^:=random(1000);
@@ -162,7 +167,16 @@ begin
   label2.visible:=false;
 
   //check if it is 5000
-  if i^=5000 then button2.Enabled:=true;
+  if i^=5000 then
+  begin
+    if i=oldp then
+    begin
+      oldp:=nil;
+      MessageDlg(rsDontFuckingFreezeThePointer, mtError, [mbok], 0);
+    end
+    else
+      button2.Enabled:=true;
+  end;
 
   {$O+}
   j:=0;
@@ -191,6 +205,7 @@ begin
   memo1.Lines.Insert(0, Format(rsStep6PointersPW, [inttostr(0)+inttostr(98712)]));
   memo1.SelStart:=0;
   font.size:=12;
+  frmHelp.attach(self,'6');
 end;
 
 

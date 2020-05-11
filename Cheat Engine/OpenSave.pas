@@ -7,21 +7,33 @@ unit OpenSave;
 interface
 
 
-uses windows, forms, LCLIntf,registry, SysUtils,AdvancedOptionsUnit,CommentsUnit,
-     CEFuncProc,classes,{formmemorymodifier,formMemoryTrainerUnit,}shellapi,
+uses
+     {$ifdef darwin}
+     macport,
+     {$endif}
+     {$ifdef windows}
+     windows,
+     {$endif}
+     forms, LCLIntf,registry, SysUtils,AdvancedOptionsUnit,CommentsUnit,
+     CEFuncProc,classes,{formmemorymodifier,formMemoryTrainerUnit,}{$ifdef windows}shellapi,{$endif}
      {MemoryTrainerDesignUnit,}StdCtrls,{ExtraTrainerComponents,}Graphics,Controls,
      tableconverter, ExtCtrls,Dialogs,NewKernelHandler, hotkeyhandler, structuresfrm,
      StructuresFrm2, comctrls,dom, xmlread,xmlwrite, FileUtil, ceguicomponents,
      zstream, luafile, disassemblerComments, commonTypeDefs, lazutf8;
 
 
-var CurrentTableVersion: dword=27;
+var CurrentTableVersion: dword=31;
+    lastLoadedTableVersion: dword;
+
 procedure protecttrainer(filename: string);
 procedure unprotecttrainer(filename: string; stream: TStream);
-procedure SaveTable(Filename: string; protect: boolean=false);
+procedure SaveTable(Filename: string; protect: boolean=false; dontDeactivateDesignerForms: boolean=false);
 procedure LoadTable(Filename: string;merge: boolean);
 procedure SaveCEM(Filename:string;address:ptrUint; size:dword);
 procedure LoadXML(doc: TXMLDocument; merge: boolean; isTrainer: boolean=false);
+
+
+
 
 {procedure LoadExe(filename: string);}
 
@@ -183,8 +195,8 @@ resourcestring
 implementation
 
 uses MainUnit, mainunit2, symbolhandler, symbolhandlerstructs, LuaHandler,
-     formsettingsunit, frmExeTrainerGeneratorUnit, trainergenerator,
-     ProcessHandlerUnit, parsers, feces, askToRunLuaScript;
+     formsettingsunit {$ifdef windows},frmExeTrainerGeneratorUnit, trainergenerator{$endif},
+     ProcessHandlerUnit, parsers{$ifdef windows},feces{$endif} ,asktorunluascript;
 
 
 
@@ -281,12 +293,15 @@ var
     i,j: integer;
     s: string;
 
+    isCodeListGroupHeader: boolean;
+
     tempbefore: array of byte;
     tempactual: array of byte;
     tempafter: array of byte;
     tempaddress: ptrUint;
     tempdescription,tempmodulename: string;
     tempoffset: dword;
+    tempsymbolname: string;
 
     symbolname: string;
     li: tlistitem;
@@ -304,9 +319,14 @@ var
 
     ask: TfrmLuaScriptQuestion;
     image: tpicture;
-    imagepos: integer;
+    imagepos: integer=0;
+
+    cle: TCodeListEntry;
+    color: TColor;
 begin
   LUA_DoScript('tableIsLoading=true');
+  LUA_functioncall('onTableLoad',[true]);
+
   try
     signed:=false;
     image:=nil;
@@ -346,6 +366,7 @@ begin
       while DissectedStructs.Count>0 do
         TDissectedStruct(DissectedStructs[0]).free;
 
+      mainform.addresslist.clear;
     end;
 
 
@@ -356,7 +377,7 @@ begin
     if CheatTable<>nil then
     begin
 
-      signed:=isProperlySigned(TDOMElement(cheattable), signedstring, imagepos, image);
+      signed:={$ifdef windows}isProperlySigned(TDOMElement(cheattable), signedstring, imagepos, image){$else}false{$endif};
 
       try
         tempnode:=CheatTable.Attributes.GetNamedItem('CheatEngineTableVersion');
@@ -370,6 +391,8 @@ begin
           version:=strtoint(tempnode.TextContent);
           if (version>CurrentTableVersion) then
             showmessage(rsOSThereIsANewerVersionifCheatEngineOutEtc);
+
+          lastLoadedTableVersion:=version;
         except
           showmessage(rsOSThisCheatTableIsCorrupt);
         end;
@@ -405,7 +428,11 @@ begin
         form:=forms.ChildNodes.Item[i];
 
         if (form.Attributes<>nil) and (form.Attributes.GetNamedItem('Class')<>nil) and (uppercase(form.Attributes.GetNamedItem('Class').TextContent)='TTRAINERFORM') then
+          {$ifdef windows}
           f:=TTrainerForm.CreateNew(nil)
+          {$else}
+          raise exception.create('This CE version has no trainer support yet')
+          {$endif}
         else
           f:=TCEform.createnew(nil);
 
@@ -429,113 +456,147 @@ begin
       begin
         CodeEntry:=codes.ChildNodes[i];
 
+
+
         if CodeEntry.NodeName='CodeEntry' then
         begin
+          isCodeListGroupHeader:=false;
+          color:=clWindowText;
+
+          if (CodeEntry.Attributes<>nil) then
+          begin
+            if (CodeEntry.Attributes.GetNamedItem('GroupHeader')<>nil) then isCodeListGroupHeader:=CodeEntry.Attributes.GetNamedItem('GroupHeader').TextContent='1';
+            if (CodeEntry.Attributes.GetNamedItem('Color')<>nil) then color:=strtoint('$'+CodeEntry.Attributes.GetNamedItem('Color').TextContent);
+          end;
+
+
+
+
           tempnode:=CodeEntry.FindNode('Description');
           if tempnode<>nil then
             tempdescription:=tempnode.TextContent
           else
             tempdescription:='...';
 
-          tempaddress:=0;
-          tempnode:=CodeEntry.FindNode('Address');
-          if tempnode<>nil then
+          if isCodeListGroupHeader=false then
           begin
-            try
-              tempaddress:=StrToQWordEx('$'+tempnode.TextContent);
-            except
+            tempnode:=CodeEntry.FindNode('AddressString');
+            if tempnode<>nil then
+              tempsymbolname:=tempnode.TextContent
+            else
+              tempsymbolname:='';
+
+            tempaddress:=0;
+            tempnode:=CodeEntry.FindNode('Address');
+            if tempnode<>nil then
+            begin
+              try
+                tempaddress:=StrToQWordEx('$'+tempnode.TextContent);
+              except
+              end;
             end;
+
+            tempnode:=CodeEntry.FindNode('ModuleName');
+            if tempnode<>nil then
+              tempmodulename:=tempnode.TextContent
+            else
+              tempmodulename:='';
+
+            tempoffset:=0;
+            tempnode:=CodeEntry.FindNode('ModuleNameOffset');
+            if tempnode<>nil then
+            begin
+              try
+                tempoffset:=strtoint('$'+tempnode.TextContent);
+              except
+
+              end;
+            end;
+
+            tempnode:=CodeEntry.FindNode('Before');
+            if tempnode<>nil then
+            begin
+              setlength(tempbefore,tempnode.ChildNodes.Count);
+              for j:=0 to tempnode.ChildNodes.Count-1 do
+              begin
+                try
+                  tempbefore[j]:=strtoint('$'+tempnode.ChildNodes[j].TextContent);
+                except
+
+                end;
+              end;
+            end else setlength(tempbefore,0);
+
+            tempnode:=CodeEntry.FindNode('Actual');
+            if tempnode<>nil then
+            begin
+              setlength(tempactual,tempnode.ChildNodes.Count);
+              for j:=0 to tempnode.ChildNodes.Count-1 do
+              begin
+                try
+                  tempactual[j]:=strtoint('$'+tempnode.ChildNodes[j].TextContent);
+                except
+
+                end;
+              end;
+            end else setlength(tempactual,0);
+
+            tempnode:=CodeEntry.FindNode('After');
+            if tempnode<>nil then
+            begin
+              setlength(tempafter,tempnode.ChildNodes.Count);
+              for j:=0 to tempnode.ChildNodes.Count-1 do
+              begin
+                try
+                  tempafter[j]:=strtoint('$'+tempnode.ChildNodes[j].TextContent);
+                except
+
+                end;
+              end;
+            end else setlength(tempafter,0);
           end;
-
-          tempnode:=CodeEntry.FindNode('ModuleName');
-          if tempnode<>nil then
-            tempmodulename:=tempnode.TextContent
-          else
-            tempmodulename:='';
-
-          tempoffset:=0;
-          tempnode:=CodeEntry.FindNode('ModuleNameOffset');
-          if tempnode<>nil then
-          begin
-            try
-              tempoffset:=strtoint('$'+tempnode.TextContent);
-            except
-
-            end;
-          end;
-
-          tempnode:=CodeEntry.FindNode('Before');
-          if tempnode<>nil then
-          begin
-            setlength(tempbefore,tempnode.ChildNodes.Count);
-            for j:=0 to tempnode.ChildNodes.Count-1 do
-            begin
-              try
-                tempbefore[j]:=strtoint('$'+tempnode.ChildNodes[j].TextContent);
-              except
-
-              end;
-            end;
-          end else setlength(tempbefore,0);
-
-          tempnode:=CodeEntry.FindNode('Actual');
-          if tempnode<>nil then
-          begin
-            setlength(tempactual,tempnode.ChildNodes.Count);
-            for j:=0 to tempnode.ChildNodes.Count-1 do
-            begin
-              try
-                tempactual[j]:=strtoint('$'+tempnode.ChildNodes[j].TextContent);
-              except
-
-              end;
-            end;
-          end else setlength(tempactual,0);
-
-          tempnode:=CodeEntry.FindNode('After');
-          if tempnode<>nil then
-          begin
-            setlength(tempafter,tempnode.ChildNodes.Count);
-            for j:=0 to tempnode.ChildNodes.Count-1 do
-            begin
-              try
-                tempafter[j]:=strtoint('$'+tempnode.ChildNodes[j].TextContent);
-              except
-
-              end;
-            end;
-          end else setlength(tempafter,0);
-
-
 
           with advancedoptions do
           begin
-            inc(numberofcodes);
-            setlength(code,numberofcodes);
+            cle:=TCodeListEntry.create;
+            cle.color:=color;
+            if isCodeListGroupHeader=false then
+            begin
+              cle.code:=TCodeRecord.Create;
 
-            setlength(code[numberofcodes-1].before,length(tempbefore));
-            for j:=0 to length(tempbefore)-1 do
-              code[numberofcodes-1].before[j]:=tempbefore[j];
 
-            setlength(code[numberofcodes-1].actualopcode,length(tempactual));
-            for j:=0 to length(tempactual)-1 do
-              code[numberofcodes-1].actualopcode[j]:=tempactual[j];
+              setlength(cle.code.before,length(tempbefore));
+              for j:=0 to length(tempbefore)-1 do
+                cle.code.before[j]:=tempbefore[j];
 
-            setlength(code[numberofcodes-1].after,length(tempafter));
-            for j:=0 to length(tempafter)-1 do
-              code[numberofcodes-1].after[j]:=tempafter[j];
+              setlength(cle.code.actualopcode,length(tempactual));
+              for j:=0 to length(tempactual)-1 do
+                cle.code.actualopcode[j]:=tempactual[j];
 
-            code[numberofcodes-1].Address:=tempaddress;
-            code[numberofcodes-1].modulename:=tempmodulename;
-            code[numberofcodes-1].offset:=tempoffset;
+              setlength(cle.code.after,length(tempafter));
+              for j:=0 to length(tempafter)-1 do
+                cle.code.after[j]:=tempafter[j];
 
-            li:=codelist2.Items.Add;
-            if code[numberofcodes-1].modulename<>'' then
-              li.Caption:=code[numberofcodes-1].modulename+'+'+inttohex(code[numberofcodes-1].offset,1)
+              if tempsymbolname<>'' then
+                cle.code.symbolname:=tempsymbolname
+              else
+              begin
+                if tempmodulename='' then
+                  cle.code.symbolname:=inttohex(tempaddress,8)
+                else
+                  cle.code.symbolname:=tempmodulename+'+'+inttohex(tempoffset,1);
+              end;
+            end;
+
+            li:=lvcodelist.Items.Add;
+            li.data:=cle;
+            if isCodeListGroupHeader then
+              li.Caption:=tempdescription
             else
-              li.Caption:=inttohex(tempaddress,8);
-
-            li.SubItems.Add(tempdescription);
+            begin
+              li.Caption:=cle.code.symbolname;
+              li.SubItems.Add(tempdescription);
+            end;
           end;
 
         end;
@@ -706,7 +767,9 @@ begin
             if isTrainer then
             begin
               MessageDlg(rsInvalidLuaForTrainer,mtError,[mbok],0);
-              ExitProcess(123);
+              Application.Terminate;
+              exit;
+              //ExitProcess(123);
             end
             else
               MessageDlg(Format(rsErrorExecutingThisTableSLuaScript, [e.message]), mtError, [mbok],0);
@@ -741,6 +804,8 @@ begin
         MainForm.imgSignature.Anchors:=[];
 
         MainForm.imgSignature.Parent:=MainForm.panel4;
+
+
 
         case imagepos of
           1:
@@ -834,6 +899,7 @@ begin
 
 
             mainform.lblSigned.OnShowHint:=imagehint.signatureShowHint;
+            mainform.lblSigned.Hint:='Do not look at this, it''s ugly';
             mainform.lblSigned.ShowHint:=true;
 
 
@@ -866,6 +932,8 @@ begin
 
   finally
     LUA_DoScript('tableIsLoading=false');
+
+    LUA_functioncall('onTableLoad',[false]);
 
     if image<>nil then
       freeandnil(image);
@@ -1032,22 +1100,7 @@ begin
   if not merge then
   begin
     //delete everything
-
-    with advancedoptions do
-    begin
-      for i:=0 to numberofcodes-1 do
-      begin
-        setlength(code[i].before,0);
-        setlength(code[i].before,0);
-        setlength(code[i].actualopcode,0);
-        setlength(code[i].after,0);
-      end;
-
-      Codelist2.Clear;
-      setlength(code,0);
-      numberofcodes:=0;
-    end;
-
+    advancedoptions.clear;
     mainform.addresslist.clear;
     Comments.Memo1.Text:='';
   end;
@@ -1078,8 +1131,10 @@ begin
   else
     mainform.Commentbutton.font.style:=mainform.Commentbutton.font.style-[fsBold];
 
-  mainform.autoattachcheck; //check if it added an auto attach check and see if it's currently running
-
+  try
+    mainform.autoattachcheck; //check if it added an auto attach check and see if it's currently running
+  except
+  end;
 //  mainform.addresslist.needsToReinterpret:=true;
 end;
 
@@ -1128,7 +1183,7 @@ begin
 
 end;   }
 
-procedure SaveXML(Filename: string);
+procedure SaveXML(Filename: string; dontDeactivateDesignerForms: boolean=false);
 var doc: TXMLDocument;
     CheatTable: TDOMElement;
     Files, Forms,Entries,Symbols, Structures, Comment,luascript, dcomments: TDOMNode;
@@ -1139,6 +1194,8 @@ var doc: TXMLDocument;
 
     sl: tstringlist;
     extradata: ^TUDSEnum;
+
+    a: TDOMAttr;
 begin
   doc:=TXMLDocument.Create;
   //doc.Encoding:=;
@@ -1151,7 +1208,7 @@ begin
     Forms:=CheatTable.AppendChild(doc.CreateElement('Forms'));
     for i:=0 to mainform.LuaForms.count-1 do
       if TCEForm(mainform.LuaForms[i]).DoNotSaveInTable=false then //only save forms that belong to the table
-        TCEForm(mainform.LuaForms[i]).savetoxml(forms);
+        TCEForm(mainform.LuaForms[i]).savetoxml(forms, dontDeactivateDesignerForms);
   end;
 
   if mainform.LuaFiles.count>0 then
@@ -1165,34 +1222,47 @@ begin
 
   mainform.addresslist.saveTableXMLToNode(entries);
 
-  if advancedoptions.numberofcodes>0 then
+  if advancedoptions.count>0 then
   begin
     CodeRecords:=CheatTable.AppendChild(doc.CreateElement('CheatCodes'));
 
 
-    for i:=0 to AdvancedOptions.numberofcodes-1 do
+    for i:=0 to AdvancedOptions.count-1 do
     begin
       CodeRecord:=CodeRecords.AppendChild(doc.CreateElement('CodeEntry'));
-      CodeRecord.AppendChild(doc.CreateElement('Description')).TextContent:=advancedoptions.codelist2.Items[i].SubItems[0];
-      CodeRecord.AppendChild(doc.CreateElement('Address')).TextContent:=inttohex(advancedoptions.code[i].address,8);
-      CodeRecord.AppendChild(doc.CreateElement('ModuleName')).TextContent:=advancedoptions.code[i].modulename;
-      CodeRecord.AppendChild(doc.CreateElement('ModuleNameOffset')).TextContent:=inttohex(advancedoptions.code[i].offset,1);
+      a:=doc.CreateAttribute('Color');
+      a.TextContent:=inttohex(TCodeListEntry(advancedoptions.lvCodelist.Items[i].data).color,8);
+      CodeRecord.Attributes.SetNamedItem(a);
 
-      //before
-      CodeBytes:=CodeRecord.AppendChild(doc.CreateElement('Before'));
-      for j:=0 to length(advancedoptions.code[i].before)-1 do
-        CodeBytes.AppendChild(doc.CreateElement('Byte')).TextContent:=inttohex(advancedoptions.code[i].before[j],2);
+      if AdvancedOptions.code[i]=nil then
+      begin
+        a:=doc.CreateAttribute('GroupHeader');
+        a.TextContent:='1';
+        CodeRecord.Attributes.SetNamedItem(a);
 
-      //actual
-      CodeBytes:=CodeRecord.AppendChild(doc.CreateElement('Actual'));
-      for j:=0 to length(advancedoptions.code[i].actualopcode)-1 do
-        CodeBytes.AppendChild(doc.CreateElement('Byte')).TextContent:=inttohex(advancedoptions.code[i].actualopcode[j],2);
+//        CodeRecord.Attributes.SetNamedItem(doc.CreateAttribute('GroupHeader')).TextContent:='1';
+        CodeRecord.AppendChild(doc.CreateElement('Description')).TextContent:=advancedoptions.lvCodelist.Items[i].Caption;
+      end
+      else
+      begin
+        CodeRecord.AppendChild(doc.CreateElement('Description')).TextContent:=advancedoptions.lvCodelist.Items[i].SubItems[0];
+        CodeRecord.AppendChild(doc.CreateElement('AddressString')).TextContent:=advancedoptions.code[i].symbolname;
 
-      //after
-      CodeBytes:=CodeRecord.AppendChild(doc.CreateElement('After'));
-      for j:=0 to length(advancedoptions.code[i].after)-1 do
-        CodeBytes.AppendChild(doc.CreateElement('Byte')).TextContent:=inttohex(advancedoptions.code[i].after[j],2);
+        //before
+        CodeBytes:=CodeRecord.AppendChild(doc.CreateElement('Before'));
+        for j:=0 to length(advancedoptions.code[i].before)-1 do
+          CodeBytes.AppendChild(doc.CreateElement('Byte')).TextContent:=inttohex(advancedoptions.code[i].before[j],2);
 
+        //actual
+        CodeBytes:=CodeRecord.AppendChild(doc.CreateElement('Actual'));
+        for j:=0 to length(advancedoptions.code[i].actualopcode)-1 do
+          CodeBytes.AppendChild(doc.CreateElement('Byte')).TextContent:=inttohex(advancedoptions.code[i].actualopcode[j],2);
+
+        //after
+        CodeBytes:=CodeRecord.AppendChild(doc.CreateElement('After'));
+        for j:=0 to length(advancedoptions.code[i].after)-1 do
+          CodeBytes.AppendChild(doc.CreateElement('Byte')).TextContent:=inttohex(advancedoptions.code[i].after[j],2);
+      end;
     end;
   end;
 
@@ -1255,8 +1325,10 @@ begin
     dassemblercomments.saveToXMLNode(dcomments);
   end;
 
+  {$ifdef windows}
   if cansigntables and formsettings.cbAlwaysSignTable.checked then
     signTable(cheattable);
+  {$endif}
 
   WriteXMLFile(doc, filename);
 
@@ -1264,7 +1336,7 @@ begin
 
 end;
 
-procedure SaveTable(Filename: string; protect: boolean=false);
+procedure SaveTable(Filename: string; protect: boolean=false; dontDeactivateDesignerForms: boolean=false);
 begin
   try
     if Uppercase(utf8tosys(extractfileext(filename)))<>'.EXE' then
@@ -1276,7 +1348,7 @@ begin
           then exit;
 
 
-      SaveXML(utf8tosys(filename));
+      SaveXML(utf8tosys(filename), dontDeactivateDesignerForms);
       if protect then
         protecttrainer(utf8tosys(filename));
     end
@@ -1284,6 +1356,7 @@ begin
     begin
       //trainer maker
       //show the trainer exegenerator form
+      {$ifdef windows}
 
       if (MainForm.LuaForms.Count=0) and (mainform.frmLuaTableScript.assemblescreen.Text='') then
         if MessageDlg(rsAskIfStupid, mtWarning, [mbyes, mbno], 0)<>mryes
@@ -1294,6 +1367,9 @@ begin
 
       frmExeTrainerGenerator.filename:=filename;
       frmExeTrainerGenerator.showmodal;
+      {$else}
+      raise exception.create('Not yet implemented');
+      {$endif}
     end;
     mainform.editedsincelastsave:=false;
   finally

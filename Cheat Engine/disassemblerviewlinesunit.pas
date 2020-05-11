@@ -6,7 +6,10 @@ interface
 
 uses LCLIntf,sysutils, classes,ComCtrls, graphics, CEFuncProc, disassembler,
      CEDebugger, debughelper, KernelDebugger, symbolhandler, plugin,
-     disassemblerComments, SymbolListHandler, ProcessHandlerUnit;
+     disassemblerComments, SymbolListHandler, ProcessHandlerUnit
+     {$ifdef USELAZFREETYPE}
+     ,LazFreeTypeIntfDrawer, EasyLazFreeType, math
+     {$endif};
 
 type
   TDisassemblerViewColorsState=(csUndefined=-1, csNormal=0, csHighlighted=1, csSecondaryHighlighted=2, csBreakpoint=3, csHighlightedbreakpoint=4, csSecondaryHighlightedbreakpoint=5, csUltimap=6, csHighlightedUltimap=7, csSecondaryHighlightedUltimap=8);
@@ -59,6 +62,11 @@ type
     isbp,isultimap: boolean;
     focused: boolean;
 
+    {$ifdef USELAZFREETYPE}
+    drawer: TIntfFreeTypeDrawer;
+    ftfont,ftfontb: TFreeTypeFont;
+    {$endif}
+
     function truncatestring(s: string; maxwidth: integer; hasSpecialChars: boolean=false): string;
     procedure buildReferencedByString(sl: tstringlist);
     function DrawTextRectWithColor(const ARect: TRect; X, Y: integer; const Text: string): integer;
@@ -92,8 +100,9 @@ end;
 implementation
 
 uses
-  MemoryBrowserFormUnit, dissectCodeThread,debuggertypedefinitions,
-  dissectcodeunit, disassemblerviewunit, frmUltimap2Unit;
+  MemoryBrowserFormUnit, DissectCodeThread,debuggertypedefinitions,
+  dissectcodeunit, disassemblerviewunit, frmUltimap2Unit, frmcodefilterunit,
+  BreakpointTypeDef, vmxfunctions, globals;
 
 resourcestring
   rsUn = '(Unconditional)';
@@ -323,7 +332,19 @@ var
 
     iscurrentinstruction: boolean;
 
+    PA: qword;
+    BO: integer;
+    b: byte;
+
+    inactive: boolean;
+
+    {$ifdef USELAZFREETYPE}
+    w,h: single;
+    {$endif}
+
 begin
+
+  fcanvas.font.style:=[];
 
   iscurrentinstruction:=MemoryBrowser.lastdebugcontext.{$ifdef cpu64}rip{$else}EIP{$endif}=address;
 
@@ -357,7 +378,7 @@ begin
   //z:=address;
 
 
-  symbolname:=symhandler.getNameFromAddress(address,symhandler.showsymbols,symhandler.showmodules,@baseofsymbol, @found);
+  symbolname:=symhandler.getNameFromAddress(address,symhandler.showsymbols,symhandler.showmodules,@baseofsymbol, @found, 8,false);
   if (faddress=baseofsymbol) and found then
   begin
     extrasymboldata:=symhandler.getExtraDataFromSymbolAtAddress(address);
@@ -378,6 +399,13 @@ begin
   bytestring:=visibleDisassembler.getLastBytestring;
   opcodestring:=visibleDisassembler.LastDisassembleData.prefix+visibleDisassembler.LastDisassembleData.opcode;
 
+  //Correction for rendering bug.
+  if (processhandler.isNetwork=true) and (processhandler.SystemArchitecture=archarm) then
+  begin
+    bytestring+=' ';
+    opcodestring+=' ';
+  end;       
+  
   parameterstring:=visibleDisassembler.LastDisassembleData.parameters+' ';
   specialstring:=visibleDisassembler.DecodeLastParametersToString;
 
@@ -401,15 +429,19 @@ begin
     end;
   end;
 
+  if symhandler.showsymbols or symhandler.showmodules then
+    addressString:=symbolname
+  else
+    addressString:=truncatestring(addressString, fHeaders.Items[0].Width-2);
+
+  TDisassemblerview(owner).DoDisassemblerViewLineOverride(address, addressstring, bytestring, opcodestring, parameterstring, specialstring);
+
   //split up into lines
   specialstrings.text:=specialstring;
   customheaderstrings.text:=dassemblercomments.commentHeader[visibleDisassembler.LastDisassembleData.address];
 
 
-  if symhandler.showsymbols or symhandler.showmodules then
-    addressString:=symbolname
-  else
-    addressString:=truncatestring(addressString, fHeaders.Items[0].Width-2);
+
 
   bytestring:=truncatestring(bytestring, fHeaders.Items[1].Width-2, true);
   //opcodestring:=truncatestring(opcodestring, fHeaders.Items[2].Width-2, true);
@@ -419,9 +451,18 @@ begin
 
   if boldheight=-1 then
   begin
-    fcanvas.Font.Style:=[fsbold];
-    boldheight:=fcanvas.TextHeight(fdisassembled)+1;
-    fcanvas.Font.Style:=[];
+    {$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+    begin
+      boldheight:=ceil(ftfontb.TextHeight(fdisassembled));
+    end
+    else
+    {$endif}
+    begin
+      fcanvas.Font.Style:=[fsbold];
+      boldheight:=fcanvas.TextHeight(fdisassembled)+1;
+      fcanvas.Font.Style:=[];
+    end;
   end;
 
   fheight:=fheight+boldheight+1;
@@ -429,11 +470,25 @@ begin
 
   //calculate how big the comments are. (beyond the default height)
   for i:=1 to specialstrings.count-1 do
-    inc(fHeight, fcanvas.textHeight(specialstrings[i]));
+  begin
+    {$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+      inc(fHeight, ceil(ftfont.TextHeight(specialstrings[i])))
+    else
+    {$endif}
+      inc(fHeight, fcanvas.textHeight(specialstrings[i]));
+  end;
 
-  //calculae the custom headersize
+  //calculate the custom headersize
   for i:=0 to customheaderstrings.count-1 do
-    inc(fheight, fCanvas.TextHeight(customheaderstrings[i]));
+  begin
+    {$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+      inc(fHeight, ceil(ftfont.TextHeight(customheaderstrings[i])))
+    else
+    {$endif}
+      inc(fheight, fCanvas.TextHeight(customheaderstrings[i]));
+  end;
 
   inc(fHeight, spaceAboveLines+spaceBelowLines);
 
@@ -468,7 +523,14 @@ begin
   begin
     parameters:='';
     if textheight=-1 then
-      textheight:=fcanvas.TextHeight(symbolname);
+    begin
+      {$ifdef USELAZFREETYPE}
+      if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+        textheight:=ceil(ftfont.TextHeight(symbolname))
+      else
+      {$endif}
+        textheight:=fcanvas.TextHeight(symbolname);
+    end;
 
     fheight:=height+textheight+1+10;
 
@@ -490,17 +552,25 @@ begin
 
     if refferencedbystrings.count>0 then
     begin
-      fcanvas.Font.Style:=[fsBold];
       if referencedbylineheight=-1 then
-        referencedbylineheight:=fcanvas.textheight('xxx');
+      begin
+        {$ifdef USELAZFREETYPE}
+        if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+        begin
+          referencedbylineheight:=ceil(ftfontb.TextHeight('xxx'));
+        end
+        else
+        {$endif}
+        begin
+          fcanvas.Font.Style:=[fsBold];
+          referencedbylineheight:=fcanvas.textheight('xxx');
+          fcanvas.Font.Style:=[];
+        end;
+      end;
 
       refferencedbylinecount:=refferencedbystrings.count;
-
       refferencedbyheight:=refferencedbylinecount*referencedbylineheight;
-
-
       fheight:=height+refferencedbyheight;
-      fcanvas.Font.Style:=[];
     end;
   end;
 
@@ -526,14 +596,14 @@ begin
 
 
   if debuggerthread<>nil then
-    bp:=debuggerthread.isBreakpoint(faddress)
+    bp:=debuggerthread.isBreakpoint(faddress,0,true)
   else
     bp:=nil;
 
 
-  isbp:=(bp<>nil) and (bp.breakpointTrigger=bptExecute) and (bp.active) and (bp.markedfordeletion=false);
-  isultimap:=(frmUltimap2<>nil) and frmUltimap2.IsMatchingAddress(faddress);
-
+  isbp:=(bp<>nil) and (bp.breakpointTrigger=bptExecute) and (bp.active or (bp.breakpointMethod=bpmException) ) and (bp.markedfordeletion=false);
+  isultimap:=((frmUltimap2<>nil) and frmUltimap2.IsMatchingAddress(faddress)) or ((frmCodeFilter<>nil) and (frmCodeFilter.isBreakpoint(faddress,b) ));
+  isultimap:=isultimap or dbvm_isBreakpoint(faddress,PA,BO, b); //mark dbvm internal breakpoints with the same color as an ultimap bp
 
 
   if selected then
@@ -605,7 +675,12 @@ begin
   end;
 
   //height may not change after this
-  fcanvas.FillRect(rect(0,top,fbitmap.width,top+height));
+  {$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+    drawer.FillRect(0,top,fbitmap.width,top+height,TColorToFPColor(colortorgb(fcanvas.Brush.Color)))
+  else
+  {$endif}
+    fcanvas.FillRect(rect(0,top,fbitmap.width,top+height));
 
   inc(linestart, spaceAboveLines);
 
@@ -619,7 +694,6 @@ begin
 
   if (baseofsymbol>0) and (faddress=baseofsymbol) then
   begin
-    fcanvas.Font.Style:=[fsbold];
 
     parameters:='';
     result:='';
@@ -655,10 +729,22 @@ begin
 
     end;
 
-    fcanvas.TextOut(fHeaders.Items[0].Left+5,linestart+5,AnsiToUtf8(result+symbolname+parameters));
-    linestart:=linestart+fcanvas.TextHeight(symbolname)+1+10;
+    {$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+    begin
+      drawer.DrawText(AnsiToUtf8(result+symbolname+parameters), ftfontb,fHeaders.Items[0].Left+5,linestart+5, tcolortofpcolor(colortorgb(fcanvas.Font.color)), [ftaLeft, ftaTop]);
+      linestart:=linestart+ceil(ftfontb.TextHeight(symbolname))+1+10;
+    end
+    else
+    {$endif}
+    begin
+      fcanvas.Font.Style:=[fsbold];
+      fcanvas.TextOut(fHeaders.Items[0].Left+5,linestart+5,AnsiToUtf8(result+symbolname+parameters));
+      linestart:=linestart+fcanvas.TextHeight(symbolname)+1+10;
+      fcanvas.Font.Style:=[];
+    end;
 
-    fcanvas.Font.Style:=[];
+
 
     //render the local vars
     if extrasymboldata<>nil then
@@ -670,7 +756,12 @@ begin
         if extrasymboldata.locals[i].position<>'' then
           parameters:=parameters+'('+extrasymboldata.locals[i].position+')';
 
-        fcanvas.TextOut(fHeaders.Items[0].Left+5,linestart,AnsiToUtf8(parameters));
+        {$ifdef USELAZFREETYPE}
+        if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          drawer.DrawText(AnsiToUtf8(parameters), ftfont, fHeaders.Items[0].Left+5,linestart,tcolortofpcolor(colortorgb(fcanvas.Font.color)),  [ftaLeft, ftaTop])
+        else
+        {$endif}
+          fcanvas.TextOut(fHeaders.Items[0].Left+5,linestart,AnsiToUtf8(parameters));
         linestart:=linestart+textheight;
       end;
       linestart:=linestart+5;
@@ -681,10 +772,17 @@ begin
   if (refferencedbylinecount>0) then
   begin
     refferencedByStart:=linestart;
+
     fcanvas.Font.Style:=[fsBold];
     for i:=0 to refferencedbylinecount-1 do
     begin
-      fcanvas.TextOut(fHeaders.Items[0].Left+5,linestart,AnsiToUtf8(refferencedbystrings[i]));
+      {$ifdef USELAZFREETYPE}
+      if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+        drawer.DrawText(AnsiToUtf8(refferencedbystrings[i]), ftfontb, fHeaders.Items[0].Left+5,linestart, tcolortofpcolor(colortorgb(fcanvas.Font.color)), [ftaLeft, ftaTop])
+      else
+      {$endif}
+        fcanvas.TextOut(fHeaders.Items[0].Left+5,linestart,AnsiToUtf8(refferencedbystrings[i]));
+
       linestart:=linestart+fcanvas.TextHeight(refferencedbystrings[i]);
     end;
     fcanvas.Font.Style:=[];
@@ -696,7 +794,11 @@ begin
     //render the custom header
     for i:=0 to customheaderstrings.count-1 do
     begin
-      fcanvas.TextOut(fHeaders.Items[0].Left,linestart,AnsiToUtf8(customheaderstrings[i]));
+      {$ifdef USELAZFREETYPE}
+      if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+        drawer.DrawText(AnsiToUtf8(customheaderstrings[i]),ftfont, fHeaders.Items[0].Left,linestart, tcolortofpcolor(colortorgb(fcanvas.Font.color)),  [ftaLeft, ftaTop] );
+      {$endif}
+        fcanvas.TextOut(fHeaders.Items[0].Left,linestart,AnsiToUtf8(customheaderstrings[i]));
       linestart:=linestart+fcanvas.TextHeight(customheaderstrings[i]);
     end;
   end;
@@ -733,7 +835,7 @@ begin
   fcanvas.font.color:=textcolor;
 
 
-  fcanvas.TextRect(rect(fHeaders.Items[0].Left, linestart, fHeaders.Items[0].Right, linestart+height), fHeaders.Items[0].Left+1,linestart, paddressString);
+  DrawTextRectWithColor(rect(fHeaders.Items[0].Left, linestart, fHeaders.Items[0].Right, linestart+height), fHeaders.Items[0].Left+1,linestart, paddressString);
 
 //  fcanvas.TextRect(rect(fHeaders.Items[1].Left, linestart, fHeaders.Items[1].Right, linestart+height),fHeaders.Items[1].Left+1,linestart, pbytestring);
 
@@ -744,11 +846,28 @@ begin
   i:=DrawTextRectWithColor(rect(fHeaders.Items[2].Left, linestart, fHeaders.Items[2].Right, linestart+height),fHeaders.Items[2].Left+1,linestart, popcodestring);
   fcanvas.font.Style:=fcanvas.font.Style-[fsBold];
 
-  inc(i, fcanvas.TextWidth('  '));
-  j:=fcanvas.textwidth('XXXXXXX');
+  {$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+  begin
+    inc(i, ceil(ftfont.TextWidth('  ')));
+    j:=ceil(ftfont.TextWidth('XXXXXXX'));
+  end
+  else
+  {$endif}
+  begin
+    inc(i, fcanvas.TextWidth('  '));
+    j:=fcanvas.textwidth('XXXXXXX');
+  end;
 
   if i>j then
-    i:=fHeaders.Items[2].Left+1+i+fcanvas.textwidth(' ')
+  begin
+    {$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (ftfont<>nil) then
+      i:=fHeaders.Items[2].Left+1+i+ceil(ftfont.textwidth(' '))
+    else
+    {$endif}
+      i:=fHeaders.Items[2].Left+1+i+fcanvas.textwidth(' ')
+  end
   else
     i:=fHeaders.Items[2].Left+1+j;
 
@@ -869,7 +988,18 @@ var defaultfontcolor, defaultbrushcolor: TColor;
     end;
   end;
 
+  {$ifdef USELAZFREETYPE}
+ var fnt: TFreeTypeFont;
+  {$endif}
+
 begin
+  {$ifdef USELAZFREETYPE}
+  if fsbold in fcanvas.Font.style then
+    fnt:=ftfontb
+  else
+    fnt:=ftfont;
+  {$endif}
+
   defaultbrushcolor:=fcanvas.Brush.color;
   defaultfontcolor:=fcanvas.Font.color;
   start:=1;
@@ -889,8 +1019,19 @@ begin
           setcolor;
 
           s:=copy(text, start,i-start);
-          fcanvas.TextRect(ARect,x,y,AnsiToUtf8(s));
-          x:=x+fcanvas.TextWidth(s);
+          {$ifdef USELAZFREETYPE}
+          if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          begin
+            drawer.DrawTextWordBreak(AnsiToUtf8(s),fnt,x,y,arect.Width-(x-startx),tcolortofpcolor(colortorgb(fcanvas.Font.Color)),[ftaLeft, ftaTop]);
+            x:=x+ceil(fnt.TextWidth(s))+1;
+          end
+          else
+          {$endif}
+          begin
+            fcanvas.TextRect(ARect,x,y,AnsiToUtf8(s));
+            x:=x+fcanvas.TextWidth(s)+1;
+          end;
+
 
           inc(i);
           while i<=length(text) do
@@ -942,12 +1083,23 @@ begin
   setcolor;
 
   s:=copy(text, start,i-start);
-  fcanvas.TextRect(ARect,x,y,AnsiToUtf8(s));
+  {$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+    drawer.DrawTextWordBreak(AnsiToUtf8(s),fnt,x,y,arect.Width-(x-startx),tcolortofpcolor(colortorgb(fcanvas.Font.Color)),[ftaLeft, ftaTop])
+  else
+  {$endif}
+    fcanvas.TextRect(ARect,x,y,AnsiToUtf8(s));
 
   fcanvas.Font.color:=defaultfontcolor;
   fcanvas.brush.color:=defaultbrushcolor;
 
-  x:=x+fcanvas.TextWidth(s);
+  {$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (fnt<>nil) then
+    x:=x+ceil(fnt.TextWidth(s))
+  else
+  {$endif}
+    x:=x+fcanvas.TextWidth(s);
+
   result:=x-startx;
 end;
 
@@ -991,6 +1143,11 @@ begin
 
   specialstrings:=tstringlist.create;
   customheaderstrings:=tstringlist.create;
+  {$ifdef USELAZFREETYPE}
+  drawer:=TDisassemblerview(owner).drawer;
+  ftfont:=TDisassemblerview(owner).ftfont;
+  ftfontb:=TDisassemblerview(owner).ftfontb;
+  {$endif}
 end;
 
 end.

@@ -10,9 +10,15 @@ unit frmStringPointerScanUnit;
 interface
 
 uses
-  windows, Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
   cefuncproc, newkernelhandler, frmStringMapUnit, MemFuncs, AvgLvlTree, Menus,
-  bigmemallochandler, math, maps, oldRegExpr, symbolhandler, commonTypeDefs;
+  bigmemallochandler, math, maps, oldRegExpr, symbolhandler, commonTypeDefs, lmessages, LCLIntf;
 
 const
   wm_sps_done=wm_user+1;
@@ -237,6 +243,7 @@ type
     edtShadowSize2: TEdit;
     edtStructsize: TEdit;
     FindDialog1: TFindDialog;
+    spImageList: TImageList;
     lblBaseRegion: TLabel;
     lblInfo: TLabel;
     lblMaxLevel: TLabel;
@@ -1890,7 +1897,7 @@ begin
   edtExtraChange(edtExtra);
 
 
-  listview1.items.count:=min(1000000, pointerfilereader.count);
+  listview1.items.count:=dword(min(dword(1000000), dword(pointerfilereader.count)));
 
   //setup rescan mode
 

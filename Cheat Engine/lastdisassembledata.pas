@@ -32,6 +32,7 @@ type
 
     datasize: integer;
     isfloat: boolean; //True if the data it reads/writes is a float (only when sure)
+    isfloat64: boolean;
     iscloaked: boolean;
 
     hasSib: boolean;
@@ -55,6 +56,7 @@ type
   PLastDisassembleData=^TLastDisassembleData;
 
 implementation
+
 
 end.
 

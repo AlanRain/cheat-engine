@@ -346,6 +346,7 @@ GW_HWNDLAST = 1
 GW_HWNDNEXT = 2
 GW_HWNDPREV = 3
 GW_HWNDOWNER = 4
+GW_OWNER = 4
 GW_CHILD = 5;
 GW_ENABLEDPOPUP = 6;
 
@@ -402,7 +403,55 @@ cdsHot=6
 cdsMarked=7
 cdsIndeterminate=8
 
+cdPrePaint=0
+cdPostPaint=1
+cdPreErase=2
+cdPostErase=3
+
 drBounds=0
 drIcon=1
 drLabel=2
 drSelectBounds=3
+
+fmCreate        = 0xff00
+fmOpenRead      = 0x0000
+fmOpenWrite     = 0x0001
+fmOpenReadWrite = 0x0002
+
+fmShareCompat   = 0x0000
+fmShareExclusive= 0x0010
+fmShareDenyWrite= 0x0020
+fmShareDenyRead = 0x0030
+fmShareDenyNone = 0x0040
+
+crDefault     = 0
+crNone        = -1
+crArrow       = -2
+crCross       = -3
+crIBeam       = -4
+crSize        = -22
+crSizeNESW    = -6 
+crSizeNS      = -7
+crSizeNWSE    = -8
+crSizeWE      = -9
+crSizeNW      = -23
+crSizeN       = -24
+crSizeNE      = -25
+crSizeW       = -26
+crSizeE       = -27
+crSizeSW      = -28
+crSizeS       = -29
+crSizeSE      = -30
+crUpArrow     = -10
+crHourGlass   = -11
+crDrag        = -12
+crNoDrop      = -13
+crHSplit      = -14
+crVSplit      = -15
+crMultiDrag   = -16
+crSQLWait     = -17
+crNo          = -18
+crAppStart    = -19
+crHelp        = -20
+crHandPoint   = -21
+crSizeAll     = -22   

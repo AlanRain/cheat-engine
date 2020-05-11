@@ -8,7 +8,14 @@ This unit could use a big update
 interface
 
 uses
-  jwawindows, windows, symbolhandler,symbolhandlerstructs,{tlhelp32,}LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport, LCLType, math,
+  {$endif}
+  {$ifdef windows}
+  jwawindows, windows,
+  {$endif}
+
+  symbolhandler,symbolhandlerstructs,LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, Buttons,CEDebugger, Menus,CEFuncProc, ExtCtrls,disassembler,
   SyncObjs,registry, ComCtrls, LResources,NewKernelHandler{$ifdef windows},win32proc{$endif};
 
@@ -18,9 +25,33 @@ type
 
   { TAdvancedOptions }
 
+  TCodeRecord=class
+  private
+  public
+    before: array of byte;
+    actualopcode: array of byte;
+    after: array of byte;
+    changed:boolean;
+    symbolname: string;
+  end;
+
+  TCodeListEntry=class
+  private
+  public
+    code: TCodeRecord; //nil if header
+
+    color: TColor;
+    constructor create;
+    destructor destroy; override;
+  end;
+
   TAdvancedOptions = class(TForm)
-    Button2: TButton;
-    Button3: TButton;
+    aoImageList: TImageList;
+    ColorDialog1: TColorDialog;
+    miNewGroup: TMenuItem;
+    miSetColor: TMenuItem;
+    N4: TMenuItem;
+    miDBVMFindWhatCodeAccesses: TMenuItem;
     PopupMenu2: TPopupMenu;
     miReplaceWithNops: TMenuItem;
     miRestoreWithOriginal: TMenuItem;
@@ -38,15 +69,26 @@ type
     Button1: TButton;
     Panel2: TPanel;
     Pausebutton: TSpeedButton;
-    SaveButton: TSpeedButton;
     Label1: TLabel;
     N3: TMenuItem;
-    Codelist2: TListView;
+    lvCodelist: TListView;
     procedure Button3Click(Sender: TObject);
-    procedure Codelist2Resize(Sender: TObject);
+    procedure lvCodelistAdvancedCustomDraw(Sender: TCustomListView;
+      const ARect: TRect; Stage: TCustomDrawStage; var DefaultDraw: Boolean);
+    procedure lvCodelistAdvancedCustomDrawItem(Sender: TCustomListView;
+      Item: TListItem; State: TCustomDrawState; Stage: TCustomDrawStage;
+      var DefaultDraw: Boolean);
+    procedure lvCodelistDragDrop(Sender, Source: TObject; X, Y: Integer);
+    procedure lvCodelistDragOver(Sender, Source: TObject; X, Y: Integer;
+      State: TDragState; var Accept: Boolean);
+    procedure lvCodelistResize(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure FormResize(Sender: TObject);
     procedure FormShow(Sender: TObject);
+    procedure lvCodelistStartDrag(Sender: TObject; var DragObject: TDragObject);
+    procedure miNewGroupClick(Sender: TObject);
+    procedure miSetColorClick(Sender: TObject);
+    procedure miDBVMFindWhatCodeAccessesClick(Sender: TObject);
     procedure PopupMenu2Popup(Sender: TObject);
     procedure miRestoreWithOriginalClick(Sender: TObject);
     procedure miReplaceWithNopsClick(Sender: TObject);
@@ -65,9 +107,8 @@ type
     procedure FormCreate(Sender: TObject);
     procedure Button2Click(Sender: TObject);
     procedure Panel1Resize(Sender: TObject);
-    procedure Codelist2DblClick(Sender: TObject);
-    procedure Panel2Resize(Sender: TObject);
-    procedure Codelist2CustomDrawItem(Sender: TCustomListView;
+    procedure lvCodelistDblClick(Sender: TObject);
+    procedure lvCodelistCustomDrawItem(Sender: TCustomListView;
       Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
   private
     { Private declarations }
@@ -75,25 +116,32 @@ type
 
     red: boolean;
     oldpausestate: boolean;
-    procedure hotkey(var Message: TMessage); message WM_HOTKEY;
+    loadedFormPosition: boolean;
+
+    CurrentlyDraggedOverItem: TListItem;
+    CurrentlyDraggedOverBefore, CurrentlyDraggedOverAfter: boolean;
+
+    procedure hotkey(var Message: TMessage); {$ifdef windows}message WM_HOTKEY;{$endif}
+    function getCount: integer;
+    function getCode(index: integer): TCodeRecord;
+    function getEntry(index: integer): TCodeListEntry;
+    function getSelected(index: integer): boolean;
+    procedure setSelected(index: integer; state: boolean);
   public
     { Public declarations }
     pausehotkeystring: string;
     pausedbyhotkey: boolean;
 
     reader: boolean;
-    numberofcodes: integer;
-    code: array of record
-            before: array of byte;
-            actualopcode: array of byte;
-            after: array of byte;
-            changed:boolean;
-            modulename: string;
-            offset: dword;
-            Address: ptrUint; //in case module offsets dont work
-          end;
-
     function AddToCodeList(address: ptrUint; sizeofopcode: integer;changed: boolean; multiadd: boolean=false):boolean;
+    procedure clear;
+
+  published
+    property count: integer read getCount;
+    property code[index: integer]: TCodeRecord read getCode;  //todo: change to code later
+    property entries[index: integer]: TCodeListEntry read getEntry;  //todo: change to code later
+    property selected[index: integer]: boolean read getSelected write setSelected;
+    property CodeList2: TListView read lvCodelist; //backward compatibility
   end;
 
 procedure unpause;
@@ -120,11 +168,33 @@ uses MainUnit, MemoryBrowserFormUnit,
   standaloneunit,}
   formsettingsunit,
   MainUnit2,
-  processhandlerunit,
+  ProcessHandlerUnit,
+  {$ifdef windows}
   DBK32functions,
+  {$endif}
   globals;
 
 
+resourcestring
+  stralreadyinthelist = 'This byte is already part of another opcode already present in the list';
+  strPartOfOpcodeInTheList='At least one of these bytes is already in the list';
+  strAddressAlreadyInTheList='This address is already in the list';
+  strCECode='Code:';
+  strNameCECode='What name do you want to give this code?';
+  strChangeOf='Change of ';
+  strCode='Code :';
+
+constructor TCodeListEntry.create;
+begin
+  color:=clWindowText;
+end;
+
+destructor TCodeListEntry.destroy;
+begin
+  if code<>nil then
+    freeandnil(code);
+  inherited destroy;
+end;
 
 
 procedure unpause;
@@ -151,14 +221,47 @@ begin
 end;
 
 
-resourcestring
-  stralreadyinthelist = 'This byte is already part of another opcode already present in the list';
-  strPartOfOpcodeInTheList='At least one of these bytes is already in the list';
-  strAddressAlreadyInTheList='This address is already in the list';
-  strCECode='Code:';
-  strNameCECode='What name do you want to give this code?';
-  strChangeOf='Change of ';
-  strCode='Code :';
+function TAdvancedOptions.getCount: integer;
+begin
+  result:=lvCodelist.Items.Count;
+end;
+
+function TAdvancedOptions.getCode(index: integer): TCodeRecord;
+begin
+  result:=nil;
+  if entries[index]=nil then exit;
+  result:=entries[index].code;
+end;
+
+function TAdvancedOptions.getEntry(index: integer): TCodeListEntry;
+begin
+  result:=nil;
+  if (index<0) or (index>=count) then exit;
+
+  result:=TCodeListEntry(lvCodelist.Items[index].data);
+end;
+
+function TAdvancedOptions.getSelected(index: integer): boolean;
+begin
+  if (index<0) or (index>=count) then exit(false);
+  result:=lvCodelist.Items[index].Selected;
+end;
+
+procedure TAdvancedOptions.setSelected(index: integer; state: boolean);
+begin
+  if (index<0) or (index>=count) then exit;
+  lvCodelist.Items[index].Selected:=state;
+end;
+
+procedure TAdvancedOptions.clear;
+var i: integer;
+begin
+  for i:=0 to lvCodelist.Items.count-1 do
+    TCodeListEntry(lvCodelist.items[i].data).Free;
+
+  lvCodelist.Clear;
+end;
+
 function TAdvancedOptions.AddToCodeList(address: ptrUint; sizeofopcode: integer;changed: boolean; multiadd: boolean=false):boolean;
 
 var i: integer;
@@ -177,32 +280,45 @@ var i: integer;
     canceled: boolean;
     D,newstring: string;
     li: tlistitem;
+
+    e: TCodeListEntry;
 begin
   //check if the address is already in the list
-  for i:=0 to numberofcodes-1 do
+
+
+  for i:=0 to lvCodelist.Items.Count-1 do
   begin
     //if (code[i].Address=address) then raise exception.create(strAddressAlreadyInTheList);
 
     //I want to see if address to address+sizeofopcode-1 is overlapping with addresses[i] to length(actualopcode[i])-1
-    starta:=code[i].Address;
-    stopa:=code[i].Address+length(code[i].actualopcode)-1;
 
-    startb:=address;
-    stopb:=address+sizeofopcode-1;
+    e:=TCodeListEntry(lvCodelist.Items[i].Data);
+    if e=nil then raise exception.create('Codelist entry '+inttostr(i)+' is not initialized'); //don't translate
 
-    if ((starta>startb) and (starta<stopb)) or
-       ((startb>starta) and (startb<stopa)) then
-      if sizeofopcode=1 then
-        raise exception.Create(stralreadyinthelist)
-      else
-        raise exception.Create(strPartOfOpcodeInTheList);
+    if e.code<>nil then
+    begin
+      try
+        starta:=symhandler.getAddressFromName(e.code.symbolname);
+      except
+        continue;
+      end;
 
+      stopa:=starta+length(e.code.actualopcode)-1;
+
+      startb:=address;
+      stopb:=address+sizeofopcode-1;
+
+      if ((starta>startb) and (starta<stopb)) or
+         ((startb>starta) and (startb<stopa)) then
+        if sizeofopcode=1 then
+          raise exception.Create(stralreadyinthelist)
+        else
+          raise exception.Create(strPartOfOpcodeInTheList);
+    end;
   end;
 
 
   address2:=address;
-
-
   d:=disassemble(address2,ignore);
   splitDisassembledString(d, false, ignore,ignore,d,ignore);
 
@@ -218,9 +334,7 @@ begin
   else
   begin
     canceled:=false;
-
   end;
-
 
   result:=not canceled;
 
@@ -228,80 +342,55 @@ begin
 
   if newstring='' then newstring:=strNoDescription;
 
+  e:=TCodeListEntry.Create;
 
-  inc(numberofcodes);
-  setlength(advancedoptions.code,numberofcodes);
 
   //before
   bread:=0;
   toread:=5;
   toread2:=5;
+  e.code:=TCodeRecord.Create;
+
   while bread<toread do
   begin
     toread:=toread2;
     readprocessmemory(processhandle,pointer(address-5+(5-toread)),addr(backupbytes[0]),toread,bread);
     if bread=toread then
     begin
-
-      setlength(AdvancedOptions.code[numberofcodes-1].before,toread);
-      for i:=0 to toread-1 do AdvancedOptions.code[numberofcodes-1].before[i]:=backupbytes[i];
+      setlength(e.code.before,toread);
+      for i:=0 to toread-1 do e.code.before[i]:=backupbytes[i];
     end;
     dec(toread2);
   end;
 
   //actualopcode
 
-  setlength(AdvancedOptions.code[numberofcodes-1].actualopcode,sizeofopcode);
-  readprocessmemory(processhandle,pointer(address),addr(AdvancedOptions.code[numberofcodes-1].actualopcode[0]),sizeofopcode,bread);
+  setlength(e.code.actualopcode,sizeofopcode);
+  readprocessmemory(processhandle,pointer(address),addr(e.code.actualopcode[0]),sizeofopcode,bread);
 
   //after
   readprocessmemory(processhandle,pointer(address+sizeofopcode),@backupbytes[0],5,bread);
 
-  setlength(AdvancedOptions.code[numberofcodes-1].after,bread);
-  for i:=0 to bread-1 do AdvancedOptions.code[numberofcodes-1].after[i]:=backupbytes[i];
+  setlength(e.code.after,bread);
+  for i:=0 to bread-1 do e.code.after[i]:=backupbytes[i];
 
-  code[numberofcodes-1].changed:=changed;
-  code[numberofcodes-1].Address:=address;
-  code[numberofcodes-1].modulename:='';
-  code[numberofcodes-1].offset:=0;
+  e.code.changed:=changed;
 
-  //get the module this code is in
-  ths:=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE or TH32CS_SNAPMODULE32,processid);
-  me32.dwSize:=sizeof(MODULEENTRY32);
-  if ths<>0 then
-  begin
-    try
-      if module32first(ths,me32) then
-      repeat
-        if (address>=ptrUint(me32.modBaseAddr)) and (address<ptrUint(me32.modBaseAddr)+me32.modBaseSize) then
-        begin
-          x:=me32.szExePath;
-          code[numberofcodes-1].modulename:=extractfilename(x);
-          code[numberofcodes-1].offset:=address-ptrUint(me32.modBaseAddr);
-          break;
-        end;
-      until not module32next(ths,me32);
-    finally
-      closehandle(ths);
-    end;
-  end;
-
-  li:=self.Codelist2.Items.Add;
-
-  if code[numberofcodes-1].modulename<>'' then
-  begin
-    li.Caption:='"'+code[numberofcodes-1].modulename+'"+'+inttohex(code[numberofcodes-1].offset,1)
-  end
+  if ssctrl in GetKeyShiftState then
+    e.code.symbolname:=symhandler.getNameFromAddress(address,true,true)
   else
-    li.Caption:=inttohex(address,8);
+    e.code.symbolname:=symhandler.getNameFromAddress(address,false,true);
 
+  li:=lvCodelist.Items.Add;
+  li.Caption:=e.code.symbolname;
   li.SubItems.Add(newstring);
+  li.Data:=e;
 
   mainform.editedsincelastsave:=true;
 end;
 
 
-procedure TAdvancedOptions.Codelist2Resize(Sender: TObject);
+procedure TAdvancedOptions.lvCodelistResize(Sender: TObject);
 begin
 
 end;
@@ -309,6 +398,152 @@ end;
 procedure TAdvancedOptions.Button3Click(Sender: TObject);
 begin
 
+end;
+
+procedure TAdvancedOptions.lvCodelistAdvancedCustomDraw(
+  Sender: TCustomListView; const ARect: TRect; Stage: TCustomDrawStage;
+  var DefaultDraw: Boolean);
+begin
+
+end;
+
+procedure TAdvancedOptions.lvCodelistAdvancedCustomDrawItem(
+  Sender: TCustomListView; Item: TListItem; State: TCustomDrawState;
+  Stage: TCustomDrawStage; var DefaultDraw: Boolean);
+var
+  c: TColor;
+  linerect: trect;
+  topfix: integer;
+begin
+  sender.Canvas.Font.Style:=sender.canvas.font.style-[fsBold];
+  sender.Canvas.Font.Color:=TCodeListEntry(item.data).color;
+
+  if (code[item.index]<>nil) and code[item.index].changed then
+  begin
+    sender.Canvas.Font.Color:=clred;
+    sender.Canvas.Font.Style:=sender.canvas.font.style+[fsBold];
+  end;
+
+  if CurrentlyDraggedOverItem=item then
+  begin
+    linerect:=item.DisplayRect(drSelectBounds);
+
+    if CurrentlyDraggedOverBefore then
+    begin
+      if item.index=0 then
+        topfix:=1
+      else
+        topfix:=0;
+
+      sender.Canvas.Line(0,max(0,linerect.top-1)+topfix,linerect.right,max(0,linerect.top-1)+topfix)
+    end
+    else
+      sender.Canvas.Line(0,linerect.bottom-1,linerect.right,linerect.bottom-1);
+  end;
+end;
+
+procedure TAdvancedOptions.lvCodelistDragDrop(Sender, Source: TObject; X,
+  Y: Integer);
+var
+  r: trect;
+  selectedItems: tlist;
+  i: integer;
+  newindex: integer;
+
+  target: TListItem;
+  from: TListItem;
+
+  fi, ti: integer;
+begin
+  if source = sender then
+  begin
+    CurrentlyDraggedOverItem:=lvCodeList.GetItemAt(x,y);
+    if CurrentlyDraggedOverItem<>nil then
+    begin
+      r:=CurrentlyDraggedOverItem.DisplayRect(drSelectBounds);
+      CurrentlyDraggedOverBefore:=y<r.top+(r.Height div 2);
+      CurrentlyDraggedOverAfter:=y>r.top+(r.height div 2);
+
+      selectedItems:=tlist.create;
+      for i:=0 to lvCodelist.Items.Count-1 do
+      begin
+        if lvcodelist.Items[i].Selected then
+          selecteditems.Add(lvcodelist.Items[i]);
+      end;
+
+      target:=CurrentlyDraggedOverItem;
+
+
+      for i:=0 to selecteditems.Count-1 do
+      begin
+        from:=tlistitem(selecteditems[i]);
+        fi:=from.index;
+        ti:=CurrentlyDraggedOverItem.index;
+
+        if from.Index<target.index then
+        begin
+          if CurrentlyDraggedOverBefore then
+            lvCodelist.Items.Move(fi,max(0, ti-1))
+          else
+            lvCodelist.Items.Move(fi,ti);
+        end
+        else
+        if from.Index=target.index then
+        begin
+          //nothing
+        end
+        else
+        begin
+          if CurrentlyDraggedOverBefore then
+            lvCodelist.Items.Move(fi,ti)
+          else
+            lvCodelist.Items.Move(fi,min(count-1,ti+1));
+        end;
+      end;
+
+
+
+      lvCodelist.ClearSelection;
+      for i:=0 to selecteditems.Count-1 do
+        tlistitem(selectedItems[i]).Selected:=true;
+
+    end;
+
+  end;
+
+  CurrentlyDraggedOverItem:=nil;
+  refresh;
+end;
+
+procedure TAdvancedOptions.lvCodelistDragOver(Sender, Source: TObject; X,
+  Y: Integer; State: TDragState; var Accept: Boolean);
+var
+  t: integer;
+  r,r2: trect;
+
+begin
+  if source=sender then
+  begin
+    CurrentlyDraggedOverItem:=lvCodeList.GetItemAt(x,y);
+    CurrentlyDraggedOverBefore:=false;
+    CurrentlyDraggedOverAfter:=false;
+
+    if CurrentlyDraggedOverItem<>nil then
+    begin
+      r:=CurrentlyDraggedOverItem.DisplayRect(drSelectBounds);
+
+      CurrentlyDraggedOverBefore:=y<r.top+(r.Height div 2);
+      CurrentlyDraggedOverAfter:=y>r.top+(r.height div 2);
+    end;
+
+    accept:=true;
+    lvCodelist.refresh;
+  end
+  else
+  begin
+    accept:=false;
+    CurrentlyDraggedOverItem:=nil;
+  end;
 end;
 
 procedure TAdvancedOptions.FormDestroy(Sender: TObject);
@@ -323,7 +558,76 @@ end;
 
 procedure TAdvancedOptions.FormShow(Sender: TObject);
 begin
+  if loadedFormPosition=false then
+  begin
+    Position := podesigned;
+    Left := mainform.left - Width;
+    Top := mainform.Top + mainform.Height - Height;
 
+    if (Left < 0) or (Top + Height > screen.Height) then
+    begin
+      left := 0;
+      Top := screen.Height - advancedoptions.Height;
+    end;
+
+    loadedFormPosition:=true;
+  end;
+end;
+
+procedure TAdvancedOptions.lvCodelistStartDrag(Sender: TObject;
+  var DragObject: TDragObject);
+begin
+//
+end;
+
+procedure TAdvancedOptions.miNewGroupClick(Sender: TObject);
+var
+  groupname: string;
+  groupcount: integer;
+  li: TListitem;
+  i: integer;
+begin
+  groupname:='';
+  groupcount:=0;
+  for i:=0 to count-1 do
+    if code[i]=nil then
+      inc(groupcount);
+
+  groupname:='Group '+inttostr(groupcount);
+
+  if InputQuery('Code List','New group name:',groupname) then
+  begin
+    li:=lvCodelist.Items.Add;
+    li.data:=TCodeListEntry.create;
+    li.caption:=groupname;
+  end;
+end;
+
+procedure TAdvancedOptions.miSetColorClick(Sender: TObject);
+var i: integer;
+begin
+  if lvCodelist.Selected=nil then exit;
+
+  colordialog1.color:=TCodeListEntry(lvCodelist.selected.Data).color;
+  if colordialog1.execute then
+  begin
+    for i:=0 to count-1 do
+      entries[i].color:=colordialog1.Color;
+  end;
+
+
+  lvCodelist.Refresh;
+end;
+
+procedure TAdvancedOptions.miDBVMFindWhatCodeAccessesClick(Sender: TObject);
+begin
+  {$ifdef windows}
+  try
+    if code[lvCodelist.ItemIndex]<>nil then
+      MemoryBrowser.DBVMFindWhatThisCodeAccesses(symhandler.getAddressFromName(code[lvCodelist.ItemIndex].symbolname));
+  except
+  end;
+  {$endif}
 end;
 
 resourcestring
@@ -339,7 +643,10 @@ var offset: ptrUint;
     mi: tmoduleinfo;
 
 begin
-  if (codelist2.Items.Count=0) or (codelist2.ItemIndex=-1) then
+
+  miSetColor.visible:=lvCodelist.ItemIndex<>-1;
+
+  if (count=0) or (lvCodelist.ItemIndex=-1) or (code[lvCodelist.itemindex]=nil) then
   begin
     miReplaceWithNops.enabled:=false;
     miRestoreWithOriginal.enabled:=false;
@@ -348,6 +655,8 @@ begin
     Openthedisassemblerhere1.enabled:=false;
     Findoutwhatthiscodechanges1.enabled:=false;
     Replaceall1.enabled:=false;
+
+
   end else
   begin
     rename1.enabled:=true;
@@ -356,13 +665,7 @@ begin
     Replaceall1.enabled:=true;
     Openthedisassemblerhere1.enabled:=true;
 
-    if code[codelist2.itemindex].modulename<>'' then
-    begin
-      symhandler.getmodulebyname(code[codelist2.itemindex].modulename,mi);
-      code[codelist2.itemindex].Address:=mi.baseaddress+code[codelist2.itemindex].offset;
-    end;
-
-    if code[codelist2.itemindex].changed then
+    if code[lvCodelist.itemindex].changed then
     begin
       miReplaceWithNops.enabled:=false;
       miRestoreWithOriginal.enabled:=true;
@@ -374,8 +677,14 @@ begin
 
       //disassemble this address, and see if it a writer or reader
       //if neither grey it out
-      offset:=code[codelist2.itemindex].Address;
-      opcode:=disassemble(offset,desc);
+
+      try
+        offset:=symhandler.getAddressFromName(code[lvCodelist.itemindex].symbolname, false);
+        opcode:=disassemble(offset,desc);
+      except
+        Findoutwhatthiscodechanges1.enabled:=false;
+        exit;
+      end;
 
       Findoutwhatthiscodechanges1.Caption:=strFindWhatCodeAccesses;
       Findoutwhatthiscodechanges1.enabled:=false;
@@ -406,17 +715,24 @@ begin
       end;
 
 
+
+
+
       Findoutwhatthiscodechanges1.enabled:=true;
     end;
   end;
 
+  miDBVMFindWhatCodeAccesses.Enabled:={$ifdef windows}isIntel and isDBVMCapable and Findoutwhatthiscodechanges1.enabled{$else}false{$endif};
+  miDBVMFindWhatCodeAccesses.Caption:='DBVM '+Findoutwhatthiscodechanges1.Caption;
+
+  //OutputDebugString('popupmenu2');
 end;
 
 resourcestring strcouldntrestorecode='Error when trying to restore this code!';
                strnotthesame='The memory at this address isn''t what it should be! Continue?';
 procedure TAdvancedOptions.miRestoreWithOriginalClick(Sender: TObject);
 var i,j: integer;
-    a: ptrUint;
+    a,address: ptrUint;
     lengthactualopcode: dword;
     written: PtrUInt;
     original: dword;
@@ -428,10 +744,17 @@ var i,j: integer;
     vpe: boolean;
 
 begin
-  for i:=0 to codelist2.items.Count-1 do
+  for i:=0 to lvCodelist.items.Count-1 do
   begin
+    if not Selected[i] then continue;
+    if code[i]=nil then continue; //header
 
-    if not codelist2.Items[i].Selected then continue;
+    try
+      address:=symhandler.getAddressFromName(code[i].symbolname);
+    except
+      continue;
+    end;
+
 
     lengthactualopcode:=length(code[i].actualopcode);
     //read the current list, if it isnt a NOP or the actualopcode give a warning
@@ -440,7 +763,9 @@ begin
     for j:=0 to lengthactualopcode-1 do
       temp[j]:=$90;
 
-    readprocessmemory(processhandle,pointer(code[i].Address),@temp2[0],lengthactualopcode,br);
+    readprocessmemory(processhandle,pointer(Address),@temp2[0],lengthactualopcode,br);
+
+
     if br<>lengthactualopcode then
       raise exception.Create(strNotReadable);
 
@@ -458,34 +783,37 @@ begin
       else
       begin
         code[i].changed:=false;
-        codelist2.Repaint;
+        lvCodelist.Repaint;
         exit;
       end;
     end;
 
 
     //set to read and write
-    vpe:=(SkipVirtualProtectEx=false) and VirtualProtectEx(processhandle,pointer(code[i].Address),length(code[i].actualopcode),PAGE_EXECUTE_READWRITE,original);  //I want to execute this, read it and write it. (so, full access)
+    vpe:=(SkipVirtualProtectEx=false) and VirtualProtectEx(processhandle,pointer(Address),length(code[i].actualopcode),PAGE_EXECUTE_READWRITE,original);  //I want to execute this, read it and write it. (so, full access)
 
     //write
-    writeprocessmemory(processhandle,pointer(code[i].Address),@code[i].actualopcode[0],length(code[i].actualopcode),written);
+    written:=0;
+    writeprocessmemory(processhandle,pointer(Address),@code[i].actualopcode[0],length(code[i].actualopcode),written);
     if written<>lengthactualopcode then
     begin
       messagedlg(strCouldntrestorecode,mtWarning,[MBok],0);
       if vpe then
-        VirtualProtectEx(processhandle,pointer(code[i].Address),lengthactualopcode,original,x);
+        VirtualProtectEx(processhandle,pointer(Address),lengthactualopcode,original,x);
       exit;
     end;
 
     //set back
-    if vpe then VirtualProtectEx(processhandle,pointer(code[i].Address),lengthactualopcode,original,x);
+    if vpe then VirtualProtectEx(processhandle,pointer(Address),lengthactualopcode,original,x);
 
-    FlushInstructionCache(processhandle,pointer(code[i].Address),lengthactualopcode);
+    {$ifdef windows}
+    FlushInstructionCache(processhandle,pointer(Address),lengthactualopcode);
+    {$endif}
 
     code[i].changed:=false;
   end;
 
-  codelist2.Repaint;
+  lvCodelist.Repaint;
 
 end;
 
@@ -513,11 +841,17 @@ var codelength: integer;
 
 begin
   //search dselected in the addresslist
-  for index:=0 to codelist2.items.Count-1 do
+  for index:=0 to lvCodelist.items.Count-1 do
   begin
-    if not codelist2.items[index].Selected then continue;
+    if not Selected[index] then continue;
+    if code[index]=nil then continue;
 
-    a:=code[index].Address;
+    try
+      a:=symhandler.getAddressFromName(code[index].symbolname);
+    except
+      continue;
+    end;
+
     codelength:=length(code[index].actualopcode);
 
     //read the opcode currently at the address
@@ -550,56 +884,46 @@ begin
     if vpe then
       VirtualProtectEx(processhandle,pointer(a),codelength,original,original);  //ignore a
 
+    {$ifdef windows}
     FlushInstructionCache(processhandle,pointer(a),codelength);
+    {$endif}
 
     code[index].changed:=true;
   end;
-  codelist2.Repaint;
+  lvCodelist.Repaint;
 end;
 
 procedure TAdvancedOptions.Remove1Click(Sender: TObject);
 var i,j,index: integer;
   multidelete: boolean;
 begin
-  multidelete:=codelist2.SelCount>1;
+  if lvCodelist.selected=nil then exit;
+
+  multidelete:=lvCodelist.SelCount>1;
   if multidelete then
-    if messagedlg(rsAreYouSureYouWishToDeleteTheseEntries, mtConfirmation, [mbyes, mbno], 0) <> mryes then exit;
+  begin
+    if dialogs.messagedlg(rsAreYouSureYouWishToDeleteTheseEntries, mtConfirmation, [mbyes, mbno], 0) <> mryes then exit
+  end
+  else
+  begin
+    if dialogs.messagedlg(rsDelete+' '+lvCodelist.selected.SubItems[0]+' ?', mtConfirmation, [mbyes, mbno], 0) <> mryes then exit;
+  end;
 
-
-  codelist2.Items.BeginUpdate;
+  lvCodelist.Items.BeginUpdate;
   try
-    while codelist2.SelCount>0 do
+
+    for index:=count-1 downto 0 do
     begin
-      index:=codelist2.Selected.Index;
-      if (index=-1) or (codelist2.Items.Count=0) then exit;
-
-      if not multidelete then
-        if messagedlg(rsDelete+' '+codelist2.Items[index].SubItems[0]+' ?', mtConfirmation, [mbyes, mbno], 0) <> mryes then exit;
-
-
-      setlength(code[index].before,0);
-      setlength(code[index].actualopcode,0);
-      setlength(code[index].after,0);
-
-      for i:=index to numberofcodes-2 do
+      if lvCodelist.items[index].Selected then
       begin
-        code[i].before:=code[i+1].before;
-        code[i].actualopcode:=code[i+1].actualopcode;
-        code[i].after:=code[i+1].after;
-        code[i].Address:=code[i+1].Address;
-        code[i].changed:=code[i+1].changed;
-        code[i].modulename:=code[i+1].modulename;
-        code[i].offset:=code[i+1].offset;
+        entries[index].destroy;
+        lvCodelist.Items.Delete(index);
       end;
-
-      dec(numberofcodes);
-      setlength(code,numberofcodes);
-
-      codelist2.Items.Delete(index);
     end;
 
+
   finally
-    codelist2.Items.endUpdate;
+    lvCodelist.Items.endUpdate;
   end;
 
 end;
@@ -607,16 +931,18 @@ end;
 procedure TAdvancedOptions.Findoutwhatthiscodechanges1Click(
   Sender: TObject);
 begin
-
-  MemoryBrowser.FindWhatThisCodeAccesses(code[codelist2.ItemIndex].Address);
-
+  try
+    if code[lvCodelist.ItemIndex]<>nil then
+      MemoryBrowser.FindWhatThisCodeAccesses(symhandler.getAddressFromName(code[lvCodelist.ItemIndex].symbolname));
+  except
+  end;
 end;
 
 procedure TAdvancedOptions.Rename1Click(Sender: TObject);
 var index: integer;
 begin
-  index:=codelist2.ItemIndex;
-  codelist2.Items[index].SubItems[0]:=inputbox(rsNewName, rsGiveTheNewNameOfThisEntry, codelist2.Items[index].SubItems[0]);
+  index:=lvCodelist.ItemIndex;
+  lvCodelist.Items[index].SubItems[0]:=inputbox(rsNewName, rsGiveTheNewNameOfThisEntry, lvCodelist.Items[index].SubItems[0]);
 end;
 
 procedure TAdvancedOptions.Findthiscodeinsideabinaryfile1Click(
@@ -632,8 +958,7 @@ end;
 
 procedure TAdvancedOptions.SaveButtonClick(Sender: TObject);
 begin
- (* StandAlone.filename:=SaveDialog1.filename;
-  standAlone.showmodal; *)
+
 end;
 
 procedure TAdvancedOptions.PausebuttonClick(Sender: TObject);
@@ -643,6 +968,7 @@ var i: integer;
     down: boolean;
     x: dword;
 begin
+  {$ifdef windows}
   down:=pausebutton.down;
   if down=oldpausestate then exit;
 
@@ -710,7 +1036,7 @@ begin
   finally
     oldpausestate:=pausebutton.down;
   end;
-
+   {$endif}
 end;
 
 procedure TAdvancedOptions.PausebuttonMouseMove(Sender: TObject;
@@ -734,19 +1060,17 @@ var codelength: integer;
     vpe: boolean;
 begin
   //search dselected in the addresslist
-  for j:=0 to codelist2.Items.Count-1 do
+  for j:=0 to lvCodelist.Items.Count-1 do
   begin
     index:=j;
+    if code[index]=nil then continue;
     if code[index].changed then continue;
 
-    if code[index].modulename<>'' then //update modulebase
-    begin
-      symhandler.getmodulebyname(code[index].modulename,mi);
-      code[index].Address:=mi.baseaddress+code[index].offset;
+    try
+      a:=symhandler.getAddressFromName(code[index].symbolname);
+    except
+      continue;
     end;
-
-
-    a:=code[index].Address;
     codelength:=length(code[index].actualopcode);
 
     //read the opcode currently at the address
@@ -781,11 +1105,13 @@ begin
     if vpe then
       VirtualProtectEx(processhandle,pointer(a),codelength,original,original);  //ignore a
 
+    {$ifdef windows}
     FlushInstructionCache(processhandle,pointer(a),codelength);
+    {$endif}
 
     code[index].changed:=true;
   end;
-  codelist2.Repaint;
+  lvCodelist.Repaint;
 end;
 
 procedure TAdvancedOptions.Timer1Timer(Sender: TObject);
@@ -820,15 +1146,16 @@ begin
   {$ifdef cpu64}
     //lazarus bug bypass
     if WindowsVersion=wvVista then
-      codelist2.OnCustomDrawItem:=nil;
+      lvCodelist.OnCustomDrawItem:=nil;
   {$endif}
+  {$else}
+  Pausebutton.visible:=false;
   {$endif}
 
-  savebutton.Visible:=false;
  // pausebutton.Left:=savebutton.Left;
 
   setlength(x,0);
-  loadformposition(self,x);
+  loadedFormPosition:=loadformposition(self,x);
 end;
 
 procedure TAdvancedOptions.Button2Click(Sender: TObject);
@@ -841,36 +1168,47 @@ begin
 
 end;
 
-procedure TAdvancedOptions.Codelist2DblClick(Sender: TObject);
+procedure TAdvancedOptions.lvCodelistDblClick(Sender: TObject);
 var mi: TModuleInfo;
 begin
-
-  if codelist2.itemindex<>-1 then
-  begin
-    if code[codelist2.itemindex].modulename<>'' then
+  try
+    if code[lvCodelist.itemindex]<>nil then
     begin
-      symhandler.getmodulebyname(code[codelist2.itemindex].modulename,mi);
-      code[codelist2.itemindex].Address:=mi.baseaddress+code[codelist2.itemindex].offset;
+      memorybrowser.disassemblerview.SelectedAddress:=symhandler.getAddressFromName(code[lvCodelist.itemindex].symbolname);
+
+      if memorybrowser.Height<(memorybrowser.Panel1.Height+100) then memorybrowser.height:=memorybrowser.Panel1.Height+100;
+      memorybrowser.panel1.visible:=true;
+      memorybrowser.show;
     end;
 
-    memorybrowser.disassemblerview.SelectedAddress:=code[codelist2.itemindex].Address;
+  except
+  end;
+end;
 
-    if memorybrowser.Height<(memorybrowser.Panel1.Height+100) then memorybrowser.height:=memorybrowser.Panel1.Height+100;
-    memorybrowser.panel1.visible:=true;
-    memorybrowser.show;
+procedure TAdvancedOptions.lvCodelistCustomDrawItem(Sender: TCustomListView;
+  Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
+{var
+  c: TColor;
+  linerect: trect; }
+begin
+  {sender.Canvas.Font.Style:=sender.canvas.font.style-[fsBold];
+  sender.Canvas.Font.Color:=TCodeListEntry(item.data).color;
+
+  if (code[item.index]<>nil) and code[item.index].changed then
+  begin
+    sender.Canvas.Font.Color:=clred;
+    sender.Canvas.Font.Style:=sender.canvas.font.style+[fsBold];
   end;
 
-end;
+  if CurrentlyDraggedOverItem=item then
+  begin
+    linerect:=item.DisplayRect(drSelectBounds);
 
-procedure TAdvancedOptions.Panel2Resize(Sender: TObject);
-begin
-  label1.left:=(panel2.Width div 2)-(label1.Width div 2);
-end;
-
-procedure TAdvancedOptions.Codelist2CustomDrawItem(Sender: TCustomListView;
-  Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
-begin
-  if code[item.index].changed then sender.Canvas.Font.Color:=clred;
+    if CurrentlyDraggedOverBefore then
+      sender.Canvas.Line(0,max(0,linerect.top-1),linerect.right,max(0,linerect.top-1))
+    else
+      sender.Canvas.Line(0,linerect.bottom-1,linerect.right,linerect.bottom-1);
+  end;}
 end;
 
 initialization

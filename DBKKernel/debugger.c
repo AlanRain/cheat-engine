@@ -12,6 +12,7 @@ todo: this whole thing can be moved to a few simple lines in dbvm...
 #include "interruptHook.h"
 
 #include "debugger.h"
+#include "vmxhelper.h"
 
 #ifdef AMD64 
 extern void interrupt1_asmentry( void ); //declared in debuggera.asm
@@ -40,6 +41,7 @@ volatile struct
 	UINT_PTR *LastStackPointer;
 	UINT_PTR *LastRealDebugRegisters;
 	HANDLE LastThreadID;
+	BOOL CausedByDBVM;
 	BOOL handledlastevent;
 	
 	BOOL storeLBR;
@@ -60,6 +62,8 @@ volatile struct
 	char b[1];
 
 	volatile BYTE DECLSPEC_ALIGN(16) fxstate[512];
+
+	BOOL isSteppingTillClear; //when set the user has entered single stepping mode. This is a one thread only thing, so when it's active and another single step happens, discard it
 
 } DebuggerState;
 
@@ -436,6 +440,7 @@ NTSTATUS debugger_getDebuggerState(PDebugStackState state)
 {
 	DbgPrint("debugger_getDebuggerState\n");
 	state->threadid=(UINT64)DebuggerState.LastThreadID;
+	state->causedbydbvm = (UINT64)DebuggerState.CausedByDBVM;
 	if (DebuggerState.LastStackPointer)
 	{
 		state->rflags=(UINT_PTR)DebuggerState.LastStackPointer[si_eflags];
@@ -602,7 +607,7 @@ NTSTATUS debugger_setDebuggerState(PDebugStackState state)
 	return STATUS_SUCCESS;
 }
 
-int breakpointHandler_kernel(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs, UINT_PTR *LBR_Stack)
+int breakpointHandler_kernel(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs, UINT_PTR *LBR_Stack, int causedbyDBVM)
 //Notice: This routine is called when interrupts are enabled and the GD bit has been set if globaL DEBUGGING HAS BEEN USED
 //Interrupts are enabled and should be at passive level, so taskswitching is possible
 {
@@ -623,6 +628,7 @@ int breakpointHandler_kernel(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs,
 	DbgPrint("rbp=%llx\n", getRBP());
 
 	DbgPrint("gs:188=%llx\n", __readgsqword(0x188));
+	DbgPrint("causedbyDBVM=%d\n", causedbyDBVM);
 #endif
 	
 	if (KeGetCurrentIrql()==0)
@@ -656,6 +662,7 @@ int breakpointHandler_kernel(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs,
 		DebuggerState.LastRealDebugRegisters=currentdebugregs;		
 		DebuggerState.LastLBRStack=LBR_Stack;
 		DebuggerState.LastThreadID=PsGetCurrentThreadId();
+		DebuggerState.CausedByDBVM = causedbyDBVM;
 		
 
 #ifdef AMD64
@@ -746,6 +753,7 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 	UINT_PTR LBR_Stack[16]; //max 16
 //	DebugReg7 _dr7=*(DebugReg7 *)&currentdebugregs[5];
 
+	int causedbyDBVM = vmxusable && vmx_causedCurrentDebugBreak();
 
 	if (cpu_familyID==0x6)
 	{
@@ -777,7 +785,7 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 	}
 	
 
-	//DbgPrint("interrupt1_handler\n");
+	DbgPrint("interrupt1_handler. DR6=%x (%x)\n", originaldr6, debugger_dr6_getValueDword());
 	
 	//check if this break should be handled or not
 	
@@ -810,7 +818,7 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 		
 			//DbgPrint("handler: Setting fake dr6 to %x\n",*(UINT_PTR *)&_dr6);
 			
-			//DebuggerState.FakedDebugRegisterState[cpunr()].DR6=*(UINT_PTR *)&_dr6;
+			DebuggerState.FakedDebugRegisterState[cpunr()].DR6=*(UINT_PTR *)&_dr6;
 
 			for (instructionPointer=0; instruction[instructionPointer] != 0x0f; instructionPointer++) ; //find the start of the instruction, skipping prefixes etc...
 			
@@ -1077,7 +1085,7 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 
 						gpvalue=(gpvalue | 0x400) & (~(1<<13)); //unset the GD value
 
-						gpvalue=0xf0401;
+						//gpvalue=0xf0401;
 						debugger_dr7_setValueDword(gpvalue);
 
 						DebuggerState.FakedDebugRegisterState[cpunr()].DR7=debugger_dr7_getValueDword();
@@ -1105,43 +1113,54 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 		}
 	}
 
+	if (DebuggerState.isSteppingTillClear) //this doesn't really work because when the state comes back to interruptable the system has a critical section lock on the GUI, so yeah... I really need a DBVM display driver for this
+	{
 	
+		if ((((PEFLAGS)&stackpointer[si_eflags])->IF == 0) || (KeGetCurrentIrql() != PASSIVE_LEVEL))
+		{
+			((PEFLAGS)&stackpointer[si_eflags])->TF = 1;
+			((PEFLAGS)&stackpointer[si_eflags])->RF = 1;
+			debugger_dr6_setValue(0xffff0ff0);
+			return 1;
+		}
+
+		DebuggerState.isSteppingTillClear = FALSE;	
+	}
+
 	
 	if (DebuggerState.isDebugging)
 	{
-		//DbgPrint("DebuggerState.isDebugging\n");
+		DbgPrint("DebuggerState.isDebugging\n");
 		//check if this should break
 		if (CurrentProcessID==(HANDLE)(UINT_PTR)DebuggerState.debuggedProcessID)
 		{	
 			UINT_PTR originaldebugregs[6];
 			UINT64 oldDR7=getDR7();
 
-			if (CurrentProcessID==(HANDLE)(UINT_PTR)DebuggerState.debuggedProcessID)
+
+			if ((((PEFLAGS)&stackpointer[si_eflags])->IF==0) || (KeGetCurrentIrql() != PASSIVE_LEVEL))
 			{
-				
-
-				if (((PEFLAGS)&stackpointer[si_eflags])->IF==0)
+				//There's no way to display the state to the usermode part of CE
+				DbgPrint("int1 at unstoppable location");
+				if (!KernelCodeStepping)
 				{
-					if (!KernelCodeStepping)
-					{
-						((PEFLAGS)&stackpointer[si_eflags])->TF=0;
-						((PEFLAGS)&stackpointer[si_eflags])->RF=1;
-						debugger_dr6_setValue(0xffff0ff0);
-						return 1;
-					}
-
-					if (((PEFLAGS)&stackpointer[si_eflags])->IF==0) //no kernelcode stepping, but continue stepping until IF == 1
-					{
-						((PEFLAGS)&stackpointer[si_eflags])->TF=1;
-						((PEFLAGS)&stackpointer[si_eflags])->RF=1;
-						debugger_dr6_setValue(0xffff0ff0);
-						return 1;
-					}
-				
-					
+					((PEFLAGS)&stackpointer[si_eflags])->TF = 0; //just give up stepping
+					DbgPrint("Quitting this");
 				}
+				else
+				{
+					DbgPrint("Stepping until valid\n");
+					((PEFLAGS)&stackpointer[si_eflags])->TF = 1; //keep going until a valid state
+					DebuggerState.isSteppingTillClear = TRUE; //Just in case a taskswitch happens right after enabling passive level with interrupts
+				}
+
+				((PEFLAGS)&stackpointer[si_eflags])->RF=1;
+				debugger_dr6_setValue(0xffff0ff0);
+				return 1;
 			}
 
+			DebuggerState.isSteppingTillClear = FALSE;
+	
 
 
 			//DbgPrint("CurrentProcessID==(HANDLE)(UINT_PTR)DebuggerState.debuggedProcessID\n");
@@ -1203,7 +1222,7 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 				int rs=1;
 				//DbgPrint("calling breakpointHandler_kernel\n");
 				
-				rs=breakpointHandler_kernel(stackpointer, currentdebugregs, LBR_Stack);	
+				rs=breakpointHandler_kernel(stackpointer, currentdebugregs, LBR_Stack, causedbyDBVM);
 				//DbgPrint("After handler\n");
 
 				//DbgPrint("rs=%d\n",rs);
@@ -1253,7 +1272,7 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 		}
 		else 
 		{
-			//DbgPrint("Not the debugged process (%x != %x)\n",CurrentProcessID,DebuggerState.debuggedProcessID );
+			DbgPrint("Not the debugged process (%x != %x)\n",CurrentProcessID,DebuggerState.debuggedProcessID );
 			//check if this break is due to a breakpoint ce has set. (during global debug threadsurfing))
 			//do that by checking if the breakpoint condition exists in the FAKE dr7 registers
 			//if so, let windows handle it, if not, it is caused by ce, which then means, skip (so execute normally)
@@ -1264,12 +1283,26 @@ int interrupt1_handler(UINT_PTR *stackpointer, UINT_PTR *currentdebugregs)
 				DebugReg7 dr7=*(DebugReg7 *)&DebuggerState.FakedDebugRegisterState[cpunr()].DR7;
 
 				//real dr6		//fake dr7
-				if ((dr6.B0) && (!(dr7.L0 || dr7.G0))) { DbgPrint("setting RF because of B0\n"); ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; } //break caused by DR0 and not expected by the current process, ignore this bp and continue
-				if ((dr6.B1) && (!(dr7.L1 || dr7.G1))) { DbgPrint("setting RF because of B1\n"); ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; } //		...		DR1		...
-				if ((dr6.B2) && (!(dr7.L2 || dr7.G2))) { DbgPrint("setting RF because of B2\n"); ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; }  //		...		DR2		...
-				if ((dr6.B3) && (!(dr7.L3 || dr7.G3))) { DbgPrint("setting RF because of B3\n"); ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; }  //		...		DR3		...
+				if ((dr6.B0) && (!(dr7.L0 || dr7.G0))) { /*DbgPrint("setting RF because of B0\n");*/ ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; } //break caused by DR0 and not expected by the current process, ignore this bp and continue
+				if ((dr6.B1) && (!(dr7.L1 || dr7.G1))) { /*DbgPrint("setting RF because of B1\n");*/ ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; } //		...		DR1		...
+				if ((dr6.B2) && (!(dr7.L2 || dr7.G2))) { /*DbgPrint("setting RF because of B2\n");*/ ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; }  //		...		DR2		...
+				if ((dr6.B3) && (!(dr7.L3 || dr7.G3))) { /*DbgPrint("setting RF because of B3\n");*/ ((PEFLAGS)&stackpointer[si_eflags])->RF=1; return 1; }  //		...		DR3		...
 			}
 
+			if (causedbyDBVM)
+				return 1; //correct PA, bad PID, ignore BP
+
+			if (DebuggerState.isSteppingTillClear) //shouldn't happen often
+			{
+				DbgPrint("That thing that shouldn\'t happen often happened\n");
+				((PEFLAGS)&stackpointer[si_eflags])->TF = 0;
+
+				DebuggerState.isSteppingTillClear = 0;
+				return 1; //ignore
+			}
+
+			DbgPrint("Returning unhandled. DR6=%x", debugger_dr6_getValueDword());
+			
 			return 0; //still here, so let windows handle it
 
 		}
@@ -1478,7 +1511,8 @@ int interrupt1_centry(UINT_PTR *stackpointer) //code segment 8 has a 32-bit stac
 	else
 	{
 		//not global debug, just clear all flags and be done with it
-		debugger_dr6_setValue(0xffff0ff0);
+		if (handled)
+			debugger_dr6_setValue(0xffff0ff0);
 	
 	}
 

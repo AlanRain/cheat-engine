@@ -5,9 +5,14 @@ unit frameHotkeyConfigUnit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ExtCtrls, LResources, Menus, Buttons, CEFuncProc,
-  commonTypeDefs;
+  commonTypeDefs, LCLType;
 
 const cehotkeycount=32;
 
@@ -17,6 +22,7 @@ type
 
   TframeHotkeyConfig = class(TFrame)
     cbStopOnRelease: TCheckBox;
+    fhcImageList: TImageList;
     MenuItem1: TMenuItem;
     Panel1: TPanel;
     Label1: TLabel;
@@ -172,7 +178,9 @@ end;
 
 procedure TFrameHotkeyConfig.updatehotkey;
 begin
-  edit1.Text:=ConvertKeyComboToString(newhotkeys[listbox1.ItemIndex]);
+  if (listbox1.ItemIndex>=0) and (listbox1.ItemIndex<listbox1.Items.Count) then
+    edit1.Text:=ConvertKeyComboToString(newhotkeys[listbox1.ItemIndex]);
+
   updatespeed;
 
 end;
@@ -200,6 +208,7 @@ procedure TframeHotkeyConfig.Edit1MouseDown(Sender: TObject;
 var key: word;
 begin
   key:=0;
+  {$ifdef windows}
   case button of
     mbMiddle: key:=VK_MBUTTON;
     mbExtra1: key:=VK_XBUTTON1;
@@ -208,7 +217,23 @@ begin
 
   if key<>0 then
     Edit1KeyDown(edit1, key, shift);
+  {$endif}
 end;
+
+{$ifdef darwin}
+
+function isModifier(k: word): boolean;
+begin
+  result:=false;
+  case k of
+    vk_lwin, vk_rwin, vk_shift,vk_lshift,
+    vk_rshift, VK_CAPITAL, VK_MENU, vk_LMENU,
+    vk_RMENU, VK_CONTROL, VK_LCONTROL, VK_RCONTROL:
+      result:=true;
+
+  end;
+end;
+{$endif}
 
 procedure TframeHotkeyConfig.Edit1KeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
@@ -219,12 +244,21 @@ begin
     if newhotkeys[listbox1.ItemIndex][4]=0 then
     begin
       for i:=0 to 4 do
+      begin
+        {$ifdef darwin}
+        if (newhotkeys[listbox1.ItemIndex][i]<>0) and (not ismodifier(key)) and (not ismodifier(newhotkeys[listbox1.ItemIndex][i])) then break;  //only one
+        {$endif}
+
         if newhotkeys[listbox1.ItemIndex][i]=0 then
         begin
           newhotkeys[listbox1.ItemIndex][i]:=key;
           break;
-        end else
-        if newhotkeys[listbox1.ItemIndex][i]=key then break;
+        end
+        else
+        if newhotkeys[listbox1.ItemIndex][i]=key then
+          break;
+
+      end;
     end;
 
     edit1.Text:=ConvertKeyComboToString(newhotkeys[listbox1.ItemIndex]);

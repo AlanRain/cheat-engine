@@ -5,8 +5,15 @@ unit frmEnumerateDLLsUnit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs,CEFuncProc,imagehlp, StdCtrls, ComCtrls, ExtCtrls, ActnList,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows, imagehlp,
+  {$endif}
+
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs,CEFuncProc, StdCtrls, ComCtrls, ExtCtrls, ActnList,
   Menus, LResources,symbolhandler, symbolhandlerstructs, FindDialogFix,
   commonTypeDefs, strutils, ProcessHandlerUnit, Clipbrd;
 
@@ -28,6 +35,7 @@ type
 
   TfrmEnumerateDLLs = class(TForm)
     CopySymbolName: TAction;
+    edImageList: TImageList;
     Label2: TLabel;
     CopySymbolName1: TMenuItem;
     TreeView1: TTreeView;

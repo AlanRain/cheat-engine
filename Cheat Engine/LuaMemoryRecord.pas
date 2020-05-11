@@ -91,6 +91,37 @@ begin
   end;
 end;
 
+function memoryrecord_getDropDownValue(L: PLua_State): integer; cdecl;
+var
+  memrec: TMemoryRecord;
+  index: integer;
+begin
+  result:=0;
+  memrec:=luaclass_getClassObject(L);
+  if lua_gettop(L)=1 then
+  begin
+    index:=lua_toInteger(L,1);
+    lua_pushstring(L, memrec.DropDownValue[index]);
+    result:=1;
+  end;
+end;
+
+
+function memoryrecord_getDropDownDescription(L: PLua_State): integer; cdecl;
+var
+  memrec: TMemoryRecord;
+  index: integer;
+begin
+  result:=0;
+  memrec:=luaclass_getClassObject(L);
+  if lua_gettop(L)=1 then
+  begin
+    index:=lua_toInteger(L,1);
+    lua_pushstring(L, memrec.DropDownDescription[index]);
+    result:=1;
+  end;
+end;
+
 
 function memoryrecord_getchild(L: PLUA_State): integer; cdecl;
 var
@@ -496,7 +527,7 @@ var
 begin
   result:=0;
   memoryrecord:=luaclass_getClassObject(L);
-  if lua_gettop(L)=4 then
+  if lua_gettop(L)>=2 then
   begin
     if (not lua_istable(L, 1)) or (not lua_isnumber(L, 2)) then exit(0);
 
@@ -523,8 +554,16 @@ begin
 
     action:=TMemrecHotkeyAction(lua_tointeger(L, 2));
 
-    value:=Lua_ToString(L, 3);
-    description:=Lua_ToString(L, 4);
+    if lua_gettop(L)>=3 then
+      value:=Lua_ToString(L, 3)
+    else
+      value:='';
+
+
+    if lua_gettop(L)>=4 then
+      description:=Lua_ToString(L, 4)
+    else
+      description:='';
 
     hk:=memoryrecord.Addhotkey(keys, action, value, description);
     result:=1;
@@ -883,6 +922,10 @@ begin
   luaclass_addPropertyToTable(L, metatable, userdata, 'OffsetCount', memoryrecord_getOffsetCount, memoryrecord_setOffsetCount);
   luaclass_addArrayPropertyToTable(L, metatable, userdata, 'Offset', memoryrecord_getOffset, memoryrecord_setOffset);
   luaclass_addArrayPropertyToTable(L, metatable, userdata, 'OffsetText', memoryrecord_getOffsetText, memoryrecord_setOffsetText);
+
+  luaclass_addArrayPropertyToTable(L, metatable, userdata, 'DropDownValue', memoryrecord_getDropDownValue, nil);
+  luaclass_addArrayPropertyToTable(L, metatable, userdata, 'DropDownDescription', memoryrecord_getDropDownDescription, nil);
+
 
 
   luaclass_addPropertyToTable(L, metatable, userdata, 'Active', memoryrecord_getActive, memoryrecord_setActive);

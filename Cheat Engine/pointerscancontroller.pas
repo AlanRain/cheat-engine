@@ -5,11 +5,13 @@ unit PointerscanController;
 interface
 
 uses
-  Windows, Classes, SysUtils, StdCtrls, ComCtrls, Sockets, syncobjs,
+  {$ifdef darwin}macport,{$endif}
+  {$ifdef windows}windows,{$endif}
+  LCLIntf, LCLType, Classes, SysUtils, StdCtrls, ComCtrls, Sockets, syncobjs,
   resolve, math, pointervaluelist,PointerscanWorker, PointerscanStructures,
   pointeraddresslist, PointerscanresultReader, cefuncproc, newkernelhandler,
-  zstream, PointerscanConnector, PointerscanNetworkStructures, WinSock2,
-  CELazySocket, AsyncTimer, MemoryStreamReader, commonTypeDefs, NullStream;
+  zstream, PointerscanConnector, PointerscanNetworkStructures, {$ifdef windows}WinSock2,{$endif}
+  CELazySocket, AsyncTimer, MemoryStreamReader, commonTypeDefs, NullStream, SyncObjs2;
 
 
 type
@@ -327,6 +329,7 @@ type
 
     generatePointermapOnly: boolean;
 
+    negativeOffsets: boolean;
     compressedptr: boolean;
     MaxBitCountModuleOffset: dword;
     MaxBitCountModuleIndex: dword;
@@ -347,7 +350,11 @@ type
     pathqueuelength: integer;
     pathqueue: TMainPathQueue;
     pathqueueCS: TCriticalSection; //critical section used to add/remove entries
-    pathqueueSemaphore: THandle; //Event to notify sleeping threads to wake up that there is a new path in the queue
+    {$ifdef windows}
+    pathqueueSemaphore: THandle;
+    {$else}
+    pathqueueSemaphore: TSemaphore;  //Event to notify sleeping threads to wake up that there is a new path in the queue
+    {$endif}
 
     overflowqueuecs: Tcriticalsection;
     overflowqueue: TDynPathQueue; //this queue will hold a number of paths that the server/worker received too many. (e.g a request for paths was made, but by the time the paths are received, the pathqueue is full again) It's accessed by the controller thread only
@@ -1607,7 +1614,13 @@ begin
           end;
 
           inc(pathqueuelength, pathsToCopy);
+          {$ifdef windows}
           ReleaseSemaphore(pathqueueSemaphore, pathsToCopy, nil);
+          {$else}
+          pathqueueSemaphore.Release(pathsToCopy);
+
+          {$endif}
+
         end;
 
       finally
@@ -1681,77 +1694,90 @@ begin
   listsize:=sizeof(dword)*(maxlevel+1);
   valuelistsize:=sizeof(qword)*(maxlevel+1);
 
-  offsetcountperlist:=0;
+  offsetcountperlist:=maxlevel;
 
+  overflowqueuecs.enter;
   pathqueueCS.enter;
   try
-
-
-    while f.Position<f.Size do
-    begin
-      i:=length(overflowqueue);
-      setlength(overflowqueue, length(overflowqueue)+1);
-      if f.Read(overflowqueue[i].valuetofind, sizeof(overflowqueue[i].valuetofind))>0 then
-      begin
-        f.read(overflowqueue[i].startlevel, sizeof(overflowqueue[i].startlevel));
-
-        if overflowqueue[i].startlevel>offsetcountperlist then
-        begin
-          j:=f.Position;
-          raise exception.create(rsInvalidData+inttostr(f.position));
-        end;
-
-        setlength(overflowqueue[i].tempresults, maxlevel+1);
-        f.read(overflowqueue[i].tempresults[0], listsize);
-
-        //length(pathqueue[i].tempresults)*sizeof(pathqueue[i].tempresults[0]));
-
-        if noloop then
-        begin
-          setlength(overflowqueue[i].valuelist, maxlevel+1);
-          f.read(overflowqueue[i].valuelist[0], valuelistsize);
-        end;
-      end;
-
-    end;
-
-    //sort based on level
-    for i:=0 to length(overflowqueue)-2 do
-    begin
-      for j:=i to length(overflowqueue)-1 do
-      begin
-        if overflowqueue[i].startlevel>overflowqueue[j].startlevel then //swap
-        begin
-          tempentry:=overflowqueue[j];
-          overflowqueue[j]:=overflowqueue[i];
-          overflowqueue[i]:=tempentry;
-        end;
-      end;
-    end;
-
-    addedToQueue:=0;
     try
 
-      for i:=length(overflowqueue)-1 downto 0 do
+      while f.Position<f.Size do
       begin
-        if pathqueuelength<MAXQUEUESIZE then
+        i:=length(overflowqueue);
+        setlength(overflowqueue, length(overflowqueue)+1);
+        if f.Read(overflowqueue[i].valuetofind, sizeof(overflowqueue[i].valuetofind))>0 then
         begin
-          pathqueue[pathqueuelength]:=overflowqueue[i];
-          inc(pathqueuelength);
+          f.read(overflowqueue[i].startlevel, sizeof(overflowqueue[i].startlevel));
 
-          overflowqueue[i].tempresults[0]:=$cece;
-          inc(addedToQueue);
+          if overflowqueue[i].startlevel>offsetcountperlist then
+          begin
+            j:=f.Position;
+            raise exception.create(rsInvalidData+inttostr(f.position));
+          end;
 
-        end else break;
+          setlength(overflowqueue[i].tempresults, maxlevel+1);
+          f.read(overflowqueue[i].tempresults[0], listsize);
+
+          //length(pathqueue[i].tempresults)*sizeof(pathqueue[i].tempresults[0]));
+
+          if noloop then
+          begin
+            setlength(overflowqueue[i].valuelist, maxlevel+1);
+            f.read(overflowqueue[i].valuelist[0], valuelistsize);
+          end;
+        end;
+
       end;
 
+      //sort based on level
+      for i:=0 to length(overflowqueue)-2 do
+      begin
+        for j:=i to length(overflowqueue)-1 do
+        begin
+          if overflowqueue[i].startlevel>overflowqueue[j].startlevel then //swap
+          begin
+            tempentry:=overflowqueue[j];
+            overflowqueue[j]:=overflowqueue[i];
+            overflowqueue[i]:=tempentry;
+          end;
+        end;
+      end;
+
+      addedToQueue:=0;
+      try
+
+        for i:=length(overflowqueue)-1 downto 0 do
+        begin
+          if pathqueuelength<MAXQUEUESIZE then
+          begin
+            pathqueue[pathqueuelength]:=overflowqueue[i];
+            inc(pathqueuelength);
+
+            overflowqueue[i].tempresults[0]:=$cece;
+            inc(addedToQueue);
+
+          end else break;
+        end;
+      except
+        on e: exception do
+        begin
+          OutputDebugString('TPointerscanController.SetupQueueForResume Error:'+e.message);
+          setlength(overflowqueue,0);
+          raise;
+        end;
+      end
     finally
       setlength(overflowqueue, length(overflowqueue)-addedToQueue);
+      {$ifdef windows}
       ReleaseSemaphore(pathqueueSemaphore, addedToQueue, nil);
+      {$else}
+      pathqueueSemaphore.Release(addedToQueue);
+      {$endif}
     end;
 
   finally
     pathqueueCS.leave;
+    overflowqueuecs.leave;
     f.free;
   end;
 
@@ -1807,7 +1833,13 @@ begin
 
       i:=pathqueuelength;
       pathqueuelength:=0;
+      {$ifdef windows}
       ReleaseSemaphore(pathqueueSemaphore, i, nil);
+      {$else}
+      pathqueueSemaphore.Release(i);
+      {$endif}
+
+//
 
     finally
       pathqueueCS.Leave;
@@ -1953,8 +1985,11 @@ begin
                 inc(pathqueuelength);
                 addedToQueue:=true;
 
+                {$ifdef windows}
                 ReleaseSemaphore(pathqueueSemaphore, 1, nil);
-
+                {$else}
+                pathqueueSemaphore.Release;
+                {$endif}
               end;
 
               pathqueueCS.leave;
@@ -2013,8 +2048,11 @@ begin
             pathqueue[pathqueuelength].valuetofind:=self.automaticaddress;
             inc(pathqueuelength);
             pathqueueCS.Leave;
+            {$ifdef windows}
             ReleaseSemaphore(pathqueueSemaphore, 1, nil);
-
+            {$else}
+            pathqueueSemaphore.Release;
+            {$endif}
           end;
 
 
@@ -2037,7 +2075,11 @@ begin
 
       while (not alldone) do
       begin
+        {$ifdef windows}
         outofdiskspace:=getDiskFreeFromPath(filename)<64*1024*1024*length(localscanners); //64MB for each thread
+        {$else}
+        outofdiskspace:=false;
+        {$endif}
 
 
         if haserror then
@@ -2302,6 +2344,7 @@ end;
 
 
 procedure TPointerscanController.acceptConnection;
+{$ifdef windows}
 var
   client: TSockAddrIn;
   size: integer;
@@ -2314,8 +2357,10 @@ var
   nonblockingmode: u_long;
 
   ss: TSocketStream;
+  {$endif}
 begin
   //accept the incoming connection and create a Host or Child controller
+  {$ifdef windows}
   ZeroMemory(@client, sizeof(client));
   size:=sizeof(client);
   s:=fpaccept(listensocket, @client, @size);
@@ -2393,7 +2438,7 @@ begin
       closehandle(s);
     end;
   end;
-
+       {$endif}
 end;
 
 
@@ -2424,6 +2469,7 @@ end;
 
 
 procedure TPointerscanController.waitForAndHandleNetworkEvent;
+{$ifdef windows}
 var
   count: integer;
   i,j: integer;
@@ -2436,8 +2482,10 @@ var
   checkedallsockets: boolean;
 
   idle: boolean;
+  {$endif}
 begin
   //listen to the listensocket if available and for the children
+  {$ifdef windows}
   EatFromOverflowQueueIfNeeded;
 
   if not initializer then
@@ -2634,7 +2682,9 @@ begin
   finally
     childnodescs.Leave;
   end;
+    {$endif}
 end;
+
 
 procedure TPointerscancontroller.handleParentException(error: string);
 var
@@ -2955,7 +3005,11 @@ begin
       begin
         //give it one good path (the best path)
 
+        {$ifdef windows}
         if WaitForSingleObject(pathqueueSemaphore, 0)=WAIT_OBJECT_0 then //lock the entry
+        {$else}
+        if pathqueueSemaphore.TryAcquire then
+        {$endif}
         begin
           paths[actualcount]:=pathqueue[0];
 
@@ -3013,7 +3067,11 @@ begin
       start:=pathqueuelength-1;
       for i:=start downto 0 do
       begin
+        {$ifdef windows}
         if WaitForSingleObject(pathqueueSemaphore, 0)=WAIT_OBJECT_0 then //lock it
+        {$else}
+        if pathqueueSemaphore.TryAcquire then
+        {$endif}
         begin
           paths[actualcount]:=pathqueue[i];
 
@@ -4141,6 +4199,7 @@ end;
 
 
 procedure TPointerscanController.setupListenerSocket;
+{$ifdef windows}
 var
   B: BOOL;
   i: integer;
@@ -4148,7 +4207,9 @@ var
 
   s: Tfilestream;
   cs: Tcompressionstream;
+  {$endif}
 begin
+  {$ifdef windows}
   //start listening on the given port. The waitForAndHandleNetworkEvent method will accept the connections
   listensocket:=socket(AF_INET, SOCK_STREAM, 0);
 
@@ -4172,7 +4233,7 @@ begin
     raise exception.create(rsPSCFailureToListen);
 
 
-
+  {$endif}
 end;
 
 function TPointerscanController.hasNetworkResponsibility: boolean;
@@ -4396,9 +4457,11 @@ var
     cs: Tcompressionstream;
     ds: Tdecompressionstream;
 
+    {$ifdef windows}
     pa,sa: DWORD_PTR;
 
     newAffinity: DWORD_PTR;
+    {$endif}
     PreferedProcessorList: array of integer; //a list of cpu numbers available to be used. If hyperthreading is on, this will not contain the uneven cpu numbers
     currentcpu: integer;  //index into PreferedProcessorList. If it's bigger than the size, make the affinity equal to PA (do not care, let windows decide)
 
@@ -4585,8 +4648,13 @@ begin
 
     setlength(PreferedProcessorList,0);
 
+
     //build a list of cpu id's
+
+    {$ifdef windows}
     PA:=0;
+
+
     GetProcessAffinityMask(GetCurrentProcess, PA, SA);
     for i:=0 to BitSizeOf(PA)-1 do
     begin
@@ -4599,12 +4667,15 @@ begin
         end;
       end;
     end;
+    {$endif}
 
     for i:=0 to threadcount-1 do
     begin
+      {$ifdef windows}
       if i<length(PreferedProcessorList) then
         addWorkerThread(PreferedProcessorList[i])
       else
+      {$endif}
         addWorkerThread;
     end;
 
@@ -4836,6 +4907,7 @@ procedure TPointerscanController.ConnectorConnect(sender: TObject; sockethandle:
 Handles an connect event. Either from the connector thread, or called by the controller after handing an incomming connect
 Raises TSocketException on error
 }
+{$ifdef windows}
 var i: integer;
     hellomsg: TPSHelloMsg;
     child: PPointerscancontrollerchild;
@@ -4843,7 +4915,11 @@ var i: integer;
 
     ipname: TSockAddrIn;
     len: Longint;
+    {$endif}
+
 begin
+
+{$ifdef windows}
   child:=nil;
 
   //mark the socket as non blocking
@@ -4981,7 +5057,7 @@ begin
     if parent.socket=nil then //make a new parent if possible
       UpdateStatus(self);
   end;
-
+  {$endif}
 end;
 
 procedure TPointerscanController.BecomeChildOfNode(ip: string; port: word; password: string);
@@ -5093,7 +5169,9 @@ procedure TPointerscanController.addworkerThread(preferedprocessor: integer=-1);
 var
   scanner: TPointerscanWorker;
   j: integer;
+  {$ifdef windows}
   NewAffinity: DWORD_PTR;
+  {$endif}
   scanfileid: integer;
   downloadtime: qword;
 
@@ -5163,12 +5241,15 @@ begin
 
 
   //pick a usable cpu. Use the process affinity mask to pick from
+  {$ifdef windows}
   if preferedprocessor<>-1 then
   begin
     NewAffinity:=1 shl preferedprocessor;
     NewAffinity:=SetThreadAffinityMask(scanner.Handle, NewAffinity);
   end;
+  {$endif}
 
+  scanner.NegativeOffsets:=negativeOffsets;
   scanner.compressedptr:=compressedptr;
   scanner.MaxBitCountModuleIndex:=MaxBitCountModuleIndex;
   scanner.MaxBitCountModuleOffset:=MaxBitCountModuleOffset;
@@ -5346,7 +5427,11 @@ begin
   localscannersCS:=TCriticalSection.create;
 
   pathqueueCS:=TCriticalSection.create;
+  {$ifdef windows}
   pathqueueSemaphore:=CreateSemaphore(nil, 0, MAXQUEUESIZE, nil);
+  {$else}
+  pathqueueSemaphore:=TSemaphore.create(MAXQUEUESIZE,true);
+  {$endif}
 
   overflowqueuecs:=TCriticalSection.create;
 
@@ -5426,7 +5511,12 @@ begin
 
 
 
+  {$ifdef windows}
   closehandle(pathqueueSemaphore);
+  {$else}
+  if pathqueueSemaphore<>nil then
+    freeandnil(pathqueueSemaphore);
+  {$endif}
 
 
   //clean up other stuff

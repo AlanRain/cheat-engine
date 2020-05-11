@@ -9,14 +9,20 @@ This unit contains the class used to control the threads spawned by lua
 interface
 
 uses
-  windows, Classes, SysUtils,lua, lualib, lauxlib, LuaHandler, syncobjs,
-  SyncObjs2, comobj;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows, comobj,
+  {$endif}
+  Classes, SysUtils,lua, lualib, lauxlib, LuaHandler, syncobjs,
+  SyncObjs2;
 
 procedure initializeLuaThread;
 
 implementation
 
-uses luaclass, LuaObject;
+uses LuaClass, LuaObject;
 
 resourcestring
   rsErrorInNativeThreadCalled = 'Error in native thread called ';
@@ -75,13 +81,18 @@ var errorstring: string;
   extraparamcount: integer;
 begin
   //call the lua function
+  {$ifdef windows}
   CoInitializeEx(nil,0);
+  {$endif}
 
   try
     extraparamcount:=lua_gettop(L);
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, functionid);
+
     lua_insert(L, 1);
+
+
 
     luaclass_newClass(L, self);
     lua_insert(L, 2);
@@ -271,7 +282,7 @@ begin
   result:=0;
   c:=luaclass_getClassObject(L);
   if lua_gettop(L)>=1 then
-    c.FreeOnTerminate:=lua_toboolean(L, -1);
+    c.FreeOnTerminate:=lua_toboolean(L, 1);
 end;
 
 function thread_synchronize(L: PLua_State): integer; cdecl;
@@ -491,11 +502,11 @@ begin
   lua_register(LuaVM, 'createEvent', luaCreateEvent);
   lua_register(LuaVM, 'createSemaphore', luaCreateSemaphore);
   lua_register(LuaVM, 'createMultiReadExclusiveWriteSynchronizer', luaCreateMultiReadExclusiveWriteSynchronizer );
-  lua_register(LuaVM, 'createMultiReadExclusiveWriteSynchronizer ', luaCreateMultiReadExclusiveWriteSynchronizer );
 end;
 
 initialization
   luaclass_register(TThread, thread_addMetaData);
+ // luaclass_register(TCEThread, thread_addMetaData);
 
   luaclass_register(TCriticalSection, criticalsection_addMetaData);
   luaclass_register(TEvent, event_addMetaData);

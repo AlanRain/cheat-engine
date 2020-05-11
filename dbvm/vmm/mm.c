@@ -10,6 +10,7 @@ Just used for basic initialization allocation, frees shouldn't happen too often
 #include "multicore.h"
 #include "common.h"
 #include "vmmhelper.h"
+#include "displaydebug.h"
 
 //#define sendstringf(s,x...)
 //#define sendstring(s)
@@ -214,6 +215,7 @@ void VirtualAddressToPageEntries(QWORD address, PPDPTE_PAE *pml4entry, PPDPTE_PA
   PTE=PTE * 8;
   PTE=PTE+0xffffff8000000000ULL;
   *pagetableentry=(PPTE_PAE)PTE;
+  asm volatile ("": : :"memory");
 
   //*pagetableentry = (PPTE_PAE)((((QWORD)address & 0x0000ffffffffffffull) >> 12)*8) + 0xfffff80000000000ULL;
 
@@ -223,6 +225,7 @@ void VirtualAddressToPageEntries(QWORD address, PPDPTE_PAE *pml4entry, PPDPTE_PA
   PDE=PDE * 8;
   PDE=PDE+0xffffff8000000000ULL;
   *pagedirentry = (PPDE_PAE)PDE;
+  asm volatile ("": : :"memory");
 
 
   //*pagedirentry = (PPDE_PAE)((((QWORD)*pagetableentry & 0x0000ffffffffffffull )>> 12)*8) + 0xfffff80000000000ULL;
@@ -233,6 +236,7 @@ void VirtualAddressToPageEntries(QWORD address, PPDPTE_PAE *pml4entry, PPDPTE_PA
   PDPTR=PDPTR * 8;
   PDPTR=PDPTR+0xffffff8000000000ULL;
   *pagedirpointerentry=(PPDPTE_PAE)PDPTR;
+  asm volatile ("": : :"memory");
 
   //*pagedirpointerentry = (PPDPTE_PAE)((((QWORD)*pagedirentry & 0x0000ffffffffffffull )>> 12)*8) + 0xfffff80000000000ULL;
 
@@ -242,6 +246,7 @@ void VirtualAddressToPageEntries(QWORD address, PPDPTE_PAE *pml4entry, PPDPTE_PA
   PML4=PML4 * 8;
   PML4=PML4+0xffffff8000000000ULL;
   *pml4entry=(PPDPTE_PAE)PML4;
+  asm volatile ("": : :"memory");
 }
 
 void VirtualAddressToIndexes(QWORD address, int *pml4index, int *pagedirptrindex, int *pagedirindex, int *pagetableindex)
@@ -355,7 +360,7 @@ int mmFindMapPositionForSize(pcpuinfo cpuinfo, int size)
         j++;
 
         if (j>=1024)
-          break; //not enough space left
+          return -1;
       }
 
       if (needed==0)
@@ -581,7 +586,8 @@ void unmapPhysicalMemoryGlobal(void *virtualaddress, int size)
   else
   {
     sendstringf("invalid global address (%6) given to unmapPhysicalMemoryGlobal\n",virtualaddress);
-    while (1);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xcd);
   }
 
 
@@ -604,7 +610,8 @@ void unmapPhysicalMemory(void *virtualaddress, int size)
   if ((pos<0) || (pos>1024))
   {
     sendstringf("%d: invalid address given to unmapPhysicalMemory (%6)\n",c->cpunr, virtualaddress);
-    while (1);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xce);
   }
 
   int i;
@@ -738,8 +745,9 @@ void *addPhysicalPageToDBVM(QWORD address)
 
   if (pagetableentry->P)
   {
-    sendstringf("Assertion failure. Virtual address %6 was already present\n", VirtualAddress);
-    while (1);
+    sendstringf("!Assertion failure! Virtual address %6 was already present (PhysicalPageListSize=%d)\n", VirtualAddress, PhysicalPageListSize);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xcf);
   }
 
   *(QWORD *)pagetableentry=address;
@@ -970,8 +978,10 @@ void *malloc2(unsigned int size)
   }
 
   sendstring("OUT OF MEMORY\n");
-  while (1)
-    jtagbp();
+  ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+
+  while (1) outportb(0x80,0xd0);
+
 
   return NULL; //still here so no memory allocated
 }
@@ -1028,7 +1038,7 @@ void *realloc2(void *oldaddress, unsigned int oldsize, unsigned int newsize)
 
   if (newaddress) //copy the contents of the old block to the new block
   {
-    copymem(newaddress, oldaddress, oldsize);
+    copymem(newaddress, oldaddress, min(oldsize,newsize));
     free2(oldaddress, oldsize);
   }
 
@@ -1069,49 +1079,81 @@ void *realloc(void *old, size_t size)
   if (old==NULL)
     return malloc(size);
 
+  if (size==0)
+    return NULL;
+
   csEnter(&AllocCS);
   int i=findClosestAllocRegion((UINT64)old);
   if ((i<AllocListPos) && (AllocList[i].size) && (AllocList[i].base==(UINT64)old) )
   {
+    int j;
+    int oldsize=AllocList[i].size;
+
     //allocate size
     void *result=malloc(size);
+    asm volatile ("": : :"memory");
+    //memset(result,0xff,size);
+    asm volatile ("": : :"memory");
 
-    //copy from old to result (AllocList[i].size bytes)
-    copymem(result, old, AllocList[i].size);
+    //copy from old to result (oldsize bytes)
+    copymem(result, old, min(size,oldsize));
+    asm volatile ("": : :"memory");
+
+    unsigned char *x,*y;
+    x=old;
+    y=result;
+    for (j=0; j<min(oldsize,size); j++)
+    {
+      if (x[j]!=y[j])
+      {
+        sendstring("realloc failed\n");
+        jtagbp();
+      }
+
+    }
 
     free(old);
+    asm volatile ("": : :"memory");
+
+
+
     csLeave(&AllocCS);
     return result;
   }
   else
   {
     sendstringf("realloc error\n");
-    while (1) ;
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xd1);
   }
 }
 
 void free(void *address)
 {
-  csEnter(&AllocCS);
-  int i=findClosestAllocRegion((UINT64)address);
-  if ((i<AllocListPos) && (AllocList[i].size) && (AllocList[i].base==(UINT64)address) )
+  if (address)
   {
-    free2(address, AllocList[i].size);
-    AllocList[i].size=0;
-  }
-  else
-  {
-    //if (debug)
-    sendstringf("free_new error\n");
-      while (1) ;
+    csEnter(&AllocCS);
+    int i=findClosestAllocRegion((UINT64)address);
+    if ((i<AllocListPos) && (AllocList[i].size) && (AllocList[i].base==(UINT64)address) )
+    {
+      int size=AllocList[i].size;
+      AllocList[i].size=0;
+
+      //memset(address,0xfe, size);
+      free2(address, size);
+
+    }
+    csLeave(&AllocCS);
   }
 
-  csLeave(&AllocCS);
+
 
 }
 
 void *malloc(size_t size)
 {
+  //if (size<4096)  size=4096;
+
   UINT64 result=(UINT64)malloc2(size);
 
   if (result)
@@ -1140,6 +1182,7 @@ void *malloc(size_t size)
           AllocList[insertpoint].base=result;
           AllocList[insertpoint].size=size;
           csLeave(&AllocCS);
+
           return (void *)result;
         }
 
@@ -1191,7 +1234,8 @@ void InitializeMM(UINT64 FirstFreeVirtualAddress)
   if (pagedirlvl4[pml4index].P) //pml4index should be 511
   {
     sendstring("Assertion failed. pagedirlvl4[pml4index].P is not 0. It should be\n");
-    while (1);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xd1);
   }
   *(QWORD*)(&pagedirlvl4[pml4index])=getCR3();
   pagedirlvl4[pml4index].P=1;
@@ -1377,4 +1421,109 @@ UINT64 VirtualToPhysical(void* address)
     r=*(UINT64 *)pagedescriptor & 0xfffffffffffff000ULL;
 
   return r;
+}
+
+void mmtest(void)
+{
+  int i,i2,size,oldsize;
+  unsigned char *s[64];
+
+  //s=malloc(sizeof(unsigned char*)*64);
+  zeromemory(s,sizeof(unsigned char*)*64);
+
+
+  sendstringf("Testing normal malloc\n");
+  for (i=0; i<64; i++)
+  {
+    size=i*3;
+    s[i]=malloc(size);
+    for (i2=0; i2<size; i2++)
+      s[i][i2]=i;
+  }
+
+  for (i=0; i<64; i++)
+  {
+    size=i*3;
+    for (i2=0; i2<size; i2++)
+      if (s[i][i2]!=i)
+      {
+        sendstringf("Error in mallocs. %d\n", i);
+        return;
+      }
+  }
+
+  sendstringf("Normal malloc success\n");
+  sendstringf("Testing realloc\n");
+
+  for (i=0; i<64; i++)
+  {
+    unsigned char *olds=s[i];
+    oldsize=i*3;
+    asm volatile ("": : :"memory");
+    size=i*4;
+    asm volatile ("": : :"memory");
+
+    s[i]=realloc(s[i],size);
+    asm volatile ("": : :"memory");
+
+    for (i2=0; i2<oldsize; i2++)
+    {
+
+      if (s[i][i2]!=i)
+      {
+        sendstringf("Error in realloc part1 s[%d][%d] was %d while it should be %d (olds=%p)\n",i,i2,s[i][i2],i,olds);
+
+        return;
+      }
+    }
+
+    for (i2=oldsize; i2<size; i2++)
+      s[i][i2]=i;
+  }
+
+  for (i=0; i<64; i++)
+  {
+    size=i*4;
+    for (i2=0; i2<size; i2++)
+      if (s[i][i2]!=i)
+      {
+
+        sendstringf("Error in realloc part2 %d\n", i);
+        return;
+      }
+  }
+
+  sendstringf("Reallocs success\n");
+  sendstringf("Testing free and realloc with 0\n");
+  for (i=0;i<64; i+=2)
+  {
+    free(s[i]);
+    s[i]=NULL;
+  }
+
+  for (i=0;i<64; i+=2)
+  {
+    size=i*4;
+    s[i]=realloc(s[i],size);
+    for (i2=0; i2<size; i2++)
+      s[i][i2]=i;
+  }
+
+  for (i=0; i<64; i++)
+  {
+    size=i*4;
+    for (i2=0; i2<size; i2++)
+      if (s[i][i2]!=i)
+      {
+        jtagbp();
+        sendstringf("Error in free/realloc(0). %d\n", i);
+        return;
+      }
+  }
+
+  sendstringf("Also OK\n");
+
+
+
+
 }

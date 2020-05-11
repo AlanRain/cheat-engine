@@ -5,7 +5,13 @@ unit frmDissectwindowUnit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, ComCtrls,StdCtrls,CEFuncProc, ExtCtrls, LResources, Menus;
 
 type TCETimerhookdata=record
@@ -53,7 +59,7 @@ var
 
 implementation
 
-uses frmCapturedTimersUnit, ProcessHandlerUnit, Parsers;
+uses frmCapturedTimersUnit, ProcessHandlerUnit, Parsers, LazUTF8;
 
 //uses frmCapturedTimersUnit;
 
@@ -85,6 +91,7 @@ begin
   //fill the treeview with stuff
   //find the windows that have this processid as owner
 //  processid:=getcurrentprocessid;
+  {$ifdef windows}
   winhandle:=getwindow(getforegroundwindow,GW_HWNDFIRST);
 
   getmem(title,101);
@@ -102,9 +109,9 @@ begin
 
     if winprocess=processid then
       if iswindowvisible(winhandle) then
-        treeview1.Items.Add(nil,IntToHex(winhandle,8)+'-'+title+' - ('+classname+')')
+        treeview1.Items.Add(nil,IntToHex(winhandle,8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+')')
       else
-        treeview1.Items.Add(nil, IntToHex(winhandle, 8)+'-'+title+' - ('+classname+') ('+rsInvis+')');
+        treeview1.Items.Add(nil, IntToHex(winhandle, 8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+') ('+rsInvis+')');
 
 
     winhandle:=getwindow(winhandle,GW_HWNDNEXT);
@@ -131,9 +138,9 @@ begin
         title[100]:=#0;
 
         if iswindowvisible(winhandle) then
-          treeview1.Items.Addchild(treeview1.items[i],IntToHex(winhandle,8)+'-'+title+' - ('+classname+')')
+          treeview1.Items.Addchild(treeview1.items[i],IntToHex(winhandle,8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+')')
         else
-          treeview1.Items.Add(nil, IntToHex(winhandle, 8)+'-'+title+' - ('+classname+') ('+rsInvis+')');
+          treeview1.Items.Add(nil, IntToHex(winhandle, 8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+') ('+rsInvis+')');
 
 
         winhandle:=getwindow(winhandle,GW_HWNDNEXT);
@@ -148,7 +155,7 @@ begin
 
   freememandnil(title);
   freememandnil(classname);
-
+  {$endif}
 end;
 
 procedure TfrmdissectWindow.Button2Click(Sender: TObject);
@@ -156,6 +163,7 @@ var h:Thandle;
     err:integer;
     title,classname: pchar;
 begin
+  {$ifdef windows}
   //get the handle
   getmem(title,101);
   getmem(classname,101);
@@ -180,9 +188,9 @@ begin
         showwindow(h,sw_show);
 
       if iswindowvisible(h) then
-        treeview1.selected.text:=IntToHex(h,8)+'-'+title+' - ('+classname+')'
+        treeview1.selected.text:=IntToHex(h,8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+')'
       else
-        treeview1.selected.text:=IntToHex(h, 8)+'-'+title+' - ('+classname+') ('+rsInvis+')';
+        treeview1.selected.text:=IntToHex(h, 8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+') ('+rsInvis+')';
 
     except
     end;
@@ -190,6 +198,7 @@ begin
 
   freememandnil(classname);
   freememandnil(title);
+  {$endif}
 end;
 
 procedure TfrmdissectWindow.Button1Click(Sender: TObject);
@@ -295,6 +304,7 @@ procedure TfrmdissectWindow.Button3Click(Sender: TObject);
 var h: thandle;
     err,i: integer;
 begin
+  {$ifdef windows}
   if treeview1.Selected<>nil then
   begin
     err:=pos('-',treeview1.selected.Text);
@@ -305,16 +315,22 @@ begin
 
     end;
   end;
+  {$endif}
 end;
 
 procedure TfrmdissectWindow.Button6Click(Sender: TObject);
-var oldname:pchar;
+
+    {$ifdef windows}
+var
+    oldname:pchar;
     h:hwnd;
     err: integer;
     name:string;
     title,classname: pchar;
+    {$endif}
 
 begin
+  {$ifdef windows}
   if treeview1.Selected=nil then exit;
 
   err:=pos('-',treeview1.selected.Text);
@@ -344,9 +360,9 @@ begin
           title[100]:=#0;
 
           if iswindowvisible(h) then
-            treeview1.selected.text:=IntToHex(h,8)+'-'+title+' - ('+classname+')'
+            treeview1.selected.text:=IntToHex(h,8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+')'
           else
-            treeview1.selected.text:=IntToHex(h, 8)+'-'+title+' - ('+classname+') ('+rsInvis+')';
+            treeview1.selected.text:=IntToHex(h, 8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+') ('+rsInvis+')';
         finally
           freememandnil(title);
           freememandnil(classname);
@@ -359,6 +375,7 @@ begin
   except
 
   end;
+  {$endif}
 end;
 
 

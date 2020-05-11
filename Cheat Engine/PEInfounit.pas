@@ -10,7 +10,13 @@ that 'some people' (idiots) would not understand that it isn't a packet editor
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, CEFuncProc, NewKernelHandler, Buttons, StdCtrls, ExtCtrls,
   ComCtrls, LResources, Menus, symbolhandler, PEInfoFunctions, commonTypeDefs,
   Clipbrd;
@@ -21,6 +27,7 @@ type
 
   TfrmPEInfo = class(TForm)
     GroupBox2: TGroupBox;
+    peiImageList: TImageList;
     miCopyTab: TMenuItem;
     miCopyEverything: TMenuItem;
     Panel1: TPanel;
@@ -75,7 +82,7 @@ function peinfo_getheadersize(header: pointer): dword;
 
 implementation
 
-uses processhandlerunit, parsers;
+uses processhandlerunit, parsers, DPIHelper;
 
 resourcestring
   rsThisIsNotAValidImage = 'This is not a valid image';
@@ -180,6 +187,7 @@ resourcestring
   rsPEBoundImportTable = 'Bound import table';
   rsPEImportAddressTable = 'import address table';
   rsPEDelayImportDescriptionTable = 'Delay import descriptor table';
+  rsPECLRRuntimeTable = 'CLR Runtime table';
   rsPEReserved = 'reserved';
   rsPECharacteristics2 = 'Characteristics=%x (should be 0)';
   rsPETimeDatastamp = 'Time datastamp=%x';
@@ -209,9 +217,12 @@ resourcestring
   rsPEDebugfile = 'Debugfile =%s';
 
 function peinfo_getcodesize(header: pointer; headersize: integer=0): dword;
+{$ifdef windows}
 var
     ImageNTHeader: PImageNtHeaders;
+{$endif}
 begin
+  {$ifdef windows}
   result:=0;
 
   if (headersize=0) or (PImageDosHeader(header)^._lfanew<=headersize-sizeof(TImageNtHeaders)) then
@@ -219,49 +230,65 @@ begin
     ImageNTHeader:=PImageNtHeaders(ptrUint(header)+PImageDosHeader(header)^._lfanew);
     result:=ImageNTHeader.OptionalHeader.SizeOfCode;
   end;
+  {$endif}
 end;
 
 function peinfo_getdatabase(header: pointer; headersize: integer=0): ptrUint;
+{$ifdef windows}
 var
     ImageNTHeader: PImageNtHeaders;
+{$endif}
 begin
   result:=0;
+  {$ifdef windows}
   if (headersize=0) or (PImageDosHeader(header)^._lfanew<=headersize-sizeof(TImageNtHeaders)) then
   begin
     ImageNTHeader:=PImageNtHeaders(ptrUint(header)+PImageDosHeader(header)^._lfanew);
     result:=ImageNTHeader.OptionalHeader.BaseOfData;
   end;
+  {$endif}
 end;
 
 function peinfo_getcodebase(header: pointer; headersize: integer=0): ptrUint;
+{$ifdef windows}
 var
     ImageNTHeader: PImageNtHeaders;
+{$endif}
 begin
+{$ifdef windows}
   result:=0;
   if (headersize=0) or (PImageDosHeader(header)^._lfanew<=headersize-sizeof(TImageNtHeaders)) then
   begin
     ImageNTHeader:=PImageNtHeaders(ptrUint(header)+PImageDosHeader(header)^._lfanew);
     result:=ImageNTHeader.OptionalHeader.BaseOfCode;
   end;
+{$endif}
 end;
 
 function peinfo_getEntryPoint(header: pointer; headersize: integer=0): ptrUint;
+{$ifdef windows}
 var
     ImageNTHeader: PImageNtHeaders;
+{$endif}
 begin
+{$ifdef windows}
   result:=0;
   if (headersize=0) or (PImageDosHeader(header)^._lfanew<=headersize-sizeof(TImageNtHeaders)) then
   begin
     ImageNTHeader:=PImageNtHeaders(ptrUint(header)+PImageDosHeader(header)^._lfanew);
     result:=ImageNTHeader.OptionalHeader.AddressOfEntryPoint;
   end;
+{$endif}
 
 end;
 
 function peinfo_getheadersize(header: pointer): dword;
+{$IFDEF windows}
 var
     ImageNTHeader: PImageNtHeaders;
+{$ENDIF}
 begin
+  {$IFDEF windows}
   result:=0;
   if PImageDosHeader(header)^.e_magic<>IMAGE_DOS_SIGNATURE then exit;
 
@@ -270,14 +297,19 @@ begin
   if ImageNTHeader.Signature<>IMAGE_NT_SIGNATURE then exit;
 
   result:=ImageNTHeader.OptionalHeader.SizeOfHeaders;
+  {$ENDIF}
 end;
 
 function peinfo_getimagesize(header: pointer): dword;
+{$IFDEF windows}
 var
     ImageNTHeader: PImageNtHeaders;
+{$ENDIF}
 begin
+  {$IFDEF windows}
   ImageNTHeader:=PImageNtHeaders(ptrUint(header)+PImageDosHeader(header)^._lfanew);
   result:=ImageNTHeader.OptionalHeader.SizeOfImage;
+  {$ENDIF}
 end;
 
 procedure TfrmPEInfo.ParseFile(loaded: boolean);
@@ -286,6 +318,8 @@ This will parse the memorycopy and fill in the all data
 params:
   Loaded: Determines if the memory copy is from when it has been loaded or on file (IAT filled in, relocations done, etc...)
 }
+
+{$IFDEF windows}
 var MZheader: ttreenode;
     PEheader: ttreenode;
     datadir: ttreenode;
@@ -302,6 +336,9 @@ var MZheader: ttreenode;
     ImageImportDirectory: PImageImportDirectory;
 
     ImageDebugDirectory: PImageDebugDirectory;
+    ImageCLRRuntimeDirectory: PImageCLRRuntimeDirectory;
+
+
 
 
     sFileType,sCharacteristics, sType: string;
@@ -328,8 +365,10 @@ var MZheader: ttreenode;
     tempstring: pchar;
 
     s: string;
+{$ENDIF}
 begin
 
+  {$IFDEF windows}
   PEItv.Items.BeginUpdate;
   lbImports.Items.BeginUpdate;
   lbExports.Items.BeginUpdate;
@@ -569,13 +608,22 @@ begin
        11: sType:=rsPEBoundImportTable;
        12: sType:=rsPEImportAddressTable;
        13: sType:=rsPEDelayImportDescriptionTable;
+       14: sType:=rsPECLRRuntimeTable;
        else sType:=rsPEReserved;
       end;
 
+
       if is64bit then
-        tempnode:=PEItv.Items.addchild(datadir,format('%.8x - %x (%s)' ,[PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].VirtualAddress, PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].Size, sType]))
+        tempaddress:=ptrUint(loadedmodule)+PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].VirtualAddress
       else
-        tempnode:=PEItv.Items.addchild(datadir,format('%.8x - %x (%s)' ,[ImageNTHeader^.OptionalHeader.DataDirectory[i].VirtualAddress, ImageNTHeader^.OptionalHeader.DataDirectory[i].Size, sType]));
+        tempaddress:=ptrUint(loadedmodule)+ImageNTHeader^.OptionalHeader.DataDirectory[i].VirtualAddress;
+
+      if is64bit then
+        tempnode:=PEItv.Items.addchild(datadir,format('%.8x - %.8x - %x (%s)' ,[tempaddress, PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].VirtualAddress, PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].Size, sType]))
+      else
+        tempnode:=PEItv.Items.addchild(datadir,format('%.8x - %.8x - %x (%s)' ,[tempaddress, ImageNTHeader^.OptionalHeader.DataDirectory[i].VirtualAddress, ImageNTHeader^.OptionalHeader.DataDirectory[i].Size, sType]));
+
+
 
 
       if (is64bit and (PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].VirtualAddress=0)) or
@@ -678,7 +726,7 @@ begin
               begin
                 importaddress:=ptrUint(loadedmodule)+ImageImportDirectory.FirstThunk+8*k;
 
-                if InRangeX(importaddress, ptrUint(loadedmodule), ptrUint(loadedmodule)+memorycopysize) then
+                if InRangeX(importaddress, ptrUint(loadedmodule), ptrUint(loadedmodule)+maxaddress) then
                 begin
 
                   if loaded then
@@ -697,12 +745,16 @@ begin
                   else
                   begin
                     //get the name from the file
-                    tempaddress:=ptrUint(loadedmodule)+pqwordarray(ptrUint(loadedmodule)+ImageImportDirectory.FirstThunk)[k]+2;
-                    if InRangeX(tempaddress, ptruint(loadedmodule), ptruint(loadedmodule)+memorycopysize-100) then
+//                  tempaddress:=ptrUint(loadedmodule)+pqwordarray(ptrUint(loadedmodule)+ImageImportDirectory.FirstThunk)[k]+2;
+                    tempaddress:=ptrUint(loadedmodule)+pqwordarray(ptrUint(loadedmodule)+ImageImportDirectory.characteristicsOrFirstThunk)[k]+2;
+
+                    if InRangeX(tempaddress, ptruint(loadedmodule), ptruint(loadedmodule)+maxaddress-100) then
                     begin
                       setlength(importfunctionname, 100);
                       CopyMemory(@importfunctionname[1], pointer(tempaddress), 99);
                       importfunctionname[99]:=#0;
+                      s:=pchar(@importfunctionname[1]);
+                      importfunctionname:=s;
                     end
                     else
                       importfunctionname:='err';
@@ -861,6 +913,30 @@ begin
           end;
         end;
 
+      end
+      else
+      if i=14 then
+      begin
+        //parse CLR info
+        if is64bit then
+          ImageCLRRuntimeDirectory:=PImageCLRRuntimeDirectory(ptrUint(loadedmodule)+PImageOptionalHeader64(@ImageNTHeader^.OptionalHeader)^.DataDirectory[i].VirtualAddress)
+        else
+          ImageCLRRuntimeDirectory:=PImageCLRRuntimeDirectory(ptrUint(loadedmodule)+ImageNTHeader^.OptionalHeader.DataDirectory[i].VirtualAddress);
+
+
+        PEItv.Items.addchild(tempnode, format('x: %x', [ptruint(ImageCLRRuntimeDirectory)]));
+
+        PEItv.Items.addchild(tempnode, format('cb: %d', [ImageCLRRuntimeDirectory^.cb]));
+        PEItv.Items.addchild(tempnode, format('MajorRuntimeVersion: %d', [ImageCLRRuntimeDirectory^.MajorRuntimeVersion]));
+        PEItv.Items.addchild(tempnode, format('MinorRuntimeVersion: %d', [ImageCLRRuntimeDirectory^.MinorRuntimeVersion]));
+        PEItv.Items.addchild(tempnode, format('Flags: 0x%x', [ImageCLRRuntimeDirectory^.Flags]));
+        PEItv.Items.addchild(tempnode, format('MetaData: 0x%x (%d)', [ImageCLRRuntimeDirectory^.MetaData.VirtualAddress, ImageCLRRuntimeDirectory^.MetaData.Size]));
+        PEItv.Items.addchild(tempnode, format('Resources: 0x%x (%d)', [ImageCLRRuntimeDirectory^.Resources.VirtualAddress, ImageCLRRuntimeDirectory^.Resources.Size]));
+        PEItv.Items.addchild(tempnode, format('StrongNameSignature: 0x%x (%d)', [ImageCLRRuntimeDirectory^.StrongNameSignature.VirtualAddress, ImageCLRRuntimeDirectory^.StrongNameSignature.Size]));
+        PEItv.Items.addchild(tempnode, format('CodeManagerTable: 0x%x (%d)', [ImageCLRRuntimeDirectory^.CodeManagerTable.VirtualAddress, ImageCLRRuntimeDirectory^.CodeManagerTable.Size]));
+        PEItv.Items.addchild(tempnode, format('VTableFixups: 0x%x (%d)', [ImageCLRRuntimeDirectory^.VTableFixups.VirtualAddress, ImageCLRRuntimeDirectory^.VTableFixups.Size]));
+        PEItv.Items.addchild(tempnode, format('ExportAddressTableJumps: 0x%x (%d)', [ImageCLRRuntimeDirectory^.ExportAddressTableJumps.VirtualAddress, ImageCLRRuntimeDirectory^.ExportAddressTableJumps.Size]));
+        PEItv.Items.addchild(tempnode, format('ManagedNativeHeader: 0x%x (%d)', [ImageCLRRuntimeDirectory^.ManagedNativeHeader.VirtualAddress, ImageCLRRuntimeDirectory^.ManagedNativeHeader.Size]));
       end;
 
     end;
@@ -885,6 +961,7 @@ begin
       loadedmodule:=nil;
     end;
   end;
+  {$ENDIF}
 end;
 
 procedure TfrmPEInfo.LoadButtonClick(Sender: TObject);
@@ -942,7 +1019,7 @@ var
   ss: TStringStream;
   i: integer;
 begin
-  ss:=TStringStream.Create('');
+  ss:=TStringStream.Create({$if FPC_FULLVERSION<030200}''{$endif});
   try
     PEItv.SaveToStream(ss);
 
@@ -982,7 +1059,7 @@ begin
   case PageControl1.TabIndex of
     0:
       begin
-        ss:=TStringStream.Create('');
+        ss:=TStringStream.Create(''{$if FPC_FULLVERSION>=030200},TEncoding.Default, false{$endif});
         PEItv.SaveToStream(ss);
         Clipboard.AsText:=ss.DataString;
 
@@ -1022,6 +1099,8 @@ begin
     modulelist.ItemIndex:=0;
     modulelist.OnClick(modulelist);
   end;
+
+  DPIHelper.AdjustSpeedButtonSize(LoadButton);
 end;
 
 procedure TfrmPEInfo.Button1Click(Sender: TObject);
@@ -1041,7 +1120,7 @@ begin
 
   if loadedmodule<>nil then
   begin
-    virtualfree(loadedmodule,0,MEM_RELEASE	);
+    virtualfree(loadedmodule,0,MEM_RELEASE);
     loadedmodule:=nil;
   end;
 

@@ -17,11 +17,12 @@
 #include "vmeventhandler.h"
 #include "vmcall.h"
 #include "mm.h"
+#include "displaydebug.h"
 
 
 int emulatevmx=1;
 
-vmxhoststate *dbvm_originalhoststate;
+//todo: vmcs link pointer implementation
 
 
 void setHostState(vmxhoststate *hoststate)
@@ -100,12 +101,14 @@ int handleByGuest(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
   if (currentcpuinfo->vmxdata.runningvmx==0)
   {
     sendstringf("handleByGuest was called while runningvmx is 0");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
   else
   if (currentcpuinfo->vmxdata.insideVMXRootMode==0)
   {
     sendstringf("runningvmx but insideVMXRootMode is 0\n");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
 
@@ -114,6 +117,7 @@ int handleByGuest(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
   if (ptrld)
   {
     sendstringf("failure loading the vmcs_regionPA\n");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while(1);
   }
 
@@ -178,12 +182,14 @@ int handleByGuest(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
   {
     nosendchar[getAPICID()]=0;
     sendstring("For some messed up reason the gdt is paged out...");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
 
   if (error)
   {
     sendstring("OK, WTF is going on here!");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
 
   }
@@ -227,6 +233,7 @@ int handleByGuest(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
     sendvmstate(currentcpuinfo, vmregisters);
 
     sendstringf("vm_guest_cr3(%6) does not match currentcpuinfo->vmxdata.originalhoststate.CR3(%6)\n",vmread(vm_guest_cr3),currentcpuinfo->vmxdata.originalhoststate.CR3 );
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
 
@@ -458,6 +465,7 @@ int handle_vmclear(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
       else
       {
         sendstring("Failure restoring guest vmx hoststate");
+        ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
         while (1);
       }
 
@@ -534,6 +542,7 @@ int handle_vmlaunch(pcpuinfo currentcpuinfo, VMRegisters *vmregisters UNUSED)
   if (currentcpuinfo->vmxdata.runningvmx)
   {
     sendstring("Assertion failed. runningvmx was not 0\n");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
 
@@ -577,12 +586,181 @@ int handle_vmresume(pcpuinfo currentcpuinfo, VMRegisters *vmregisters UNUSED)
   if (currentcpuinfo->vmxdata.runningvmx)
   {
     sendstring("Assertion failed. runningvmx was not 0\n");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
 
   currentcpuinfo->vmxdata.runningvmx=1;
 
   return 0xce01; //launch with the last entrystate and do a resume
+}
+
+int handle_invept(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
+{
+  int vmcsinvepterror=0;
+  int vmcsinvepterrorcode=0;
+
+  sendstringf("handle_invept\n");
+  if (currentcpuinfo->vmxdata.insideVMXRootMode==0)
+    return raiseInvalidOpcodeException(currentcpuinfo);
+
+  instruction_info_vm ii;
+  ii.instructioninfo=vmread(vm_instruction_information); //e.g: 7361d130 for invept rdi,[rsi]
+  /*  0111 0 0110 1 1000 011 1010 0 010 0110 0 00
+   *
+   * scaling=00     (0)
+   * reserved=0     (0)
+   * reg1=0110      (6)
+   * addresSize=010 (2)
+   * usesreg = 0    (0)
+   * undefined =1010
+   * segmentreg: 011 (3)
+   * indexreg: 1000  (10)
+   * indexreginvalid: 1
+   * basereg: 0110 (6)
+   * basereginvalid: 0
+   * reg2: 0111 (7)
+   *
+   *reg1=rsi
+   *basereg=rsi
+   *reg2=rdi
+   */
+  int invepttype=regToVal(ii.reg2, vmregisters);
+  QWORD inveptdataaddress=getDestinationAddressFromInstructionInfo(vmregisters);
+
+  //read the pointerinfo
+  int error;
+  QWORD pagefault;
+
+  sendstringf("invept: Type=%d data=%6\n", invepttype, inveptdataaddress);
+
+
+  PINVEPTDESCRIPTOR inveptdescriptor=mapVMmemory(currentcpuinfo, inveptdataaddress, 16, &error, &pagefault);
+  if (error==2)
+    return raisePagefault(currentcpuinfo, pagefault);
+
+
+
+
+  if (vmptrld(currentcpuinfo->vmxdata.guest_activeVMCS))
+  {
+    sendstringf("Failure to load guest active vmcs state");
+    VMfailInvalid();
+    unmapVMmemory(inveptdescriptor, 16);
+    return 0;
+  }
+
+  //do the invept instruction
+
+  vmcsinvepterror=_invept2(invepttype, inveptdescriptor);
+  if (vmcsinvepterror==2) //error happened and it had an errorcode
+    vmcsinvepterrorcode=vmread(vm_errorcode);
+
+  //back to the original state
+  vmptrld(currentcpuinfo->vmcs_regionPA);
+
+  unmapVMmemory(inveptdescriptor, 16);
+
+  vmwrite(vm_guest_rip,vmread(vm_guest_rip)+vmread(vm_exit_instructionlength));
+
+  if (vmcsinvepterror)
+  {
+    if (vmcsinvepterror==1)
+      VMfailInvalid();
+    else
+      VMfailValid(currentcpuinfo, vmcsinvepterrorcode);
+  }
+  else
+    vmsucceed();
+
+  return 0;
+}
+
+int handle_invvpid(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
+{
+  int vmcsinvvpiderror=0;
+  int vmcsinvvpiderrorcode=0;
+
+  sendstringf("handle_invept\n");
+  if (currentcpuinfo->vmxdata.insideVMXRootMode==0)
+    return raiseInvalidOpcodeException(currentcpuinfo);
+
+  instruction_info_vm ii;
+  ii.instructioninfo=vmread(vm_instruction_information); //e.g: 7361d130 for invept rdi,[rsi]
+  /*  0111 0 0110 1 1000 011 1010 0 010 0110 0 00
+   *
+   * scaling=00     (0)
+   * reserved=0     (0)
+   * reg1=0110      (6)
+   * addresSize=010 (2)
+   * usesreg = 0    (0)
+   * undefined =1010
+   * segmentreg: 011 (3)
+   * indexreg: 1000  (10)
+   * indexreginvalid: 1
+   * basereg: 0110 (6)
+   * basereginvalid: 0
+   * reg2: 0111 (7)
+   *
+   *reg1=rsi
+   *basereg=rsi
+   *reg2=rdi
+   */
+  int invvpidtype=regToVal(ii.reg2, vmregisters);
+  QWORD invvpiddataaddress=getDestinationAddressFromInstructionInfo(vmregisters);
+
+  //read the pointerinfo
+  int error;
+  QWORD pagefault;
+
+  sendstringf("invvpid: Type=%d data=%6\n", invvpidtype, invvpiddataaddress);
+
+
+  PINVVPIDDESCRIPTOR invvpiddescriptor=mapVMmemory(currentcpuinfo, invvpiddataaddress, 16, &error, &pagefault);
+  if (error==2)
+    return raisePagefault(currentcpuinfo, pagefault);
+
+
+
+
+  if (vmptrld(currentcpuinfo->vmxdata.guest_activeVMCS))
+  {
+    sendstringf("Failure to load guest active vmcs state");
+    VMfailInvalid();
+    unmapVMmemory(invvpiddescriptor, 16);
+    return 0;
+  }
+
+  //do the invept instruction
+
+  vmcsinvvpiderror=_invvpid2(invvpidtype, invvpiddescriptor);
+  if (vmcsinvvpiderror==2) //error happened and it had an errorcode
+    vmcsinvvpiderrorcode=vmread(vm_errorcode);
+
+  //back to the original state
+  vmptrld(currentcpuinfo->vmcs_regionPA);
+
+  unmapVMmemory(invvpiddescriptor, 16);
+
+  vmwrite(vm_guest_rip,vmread(vm_guest_rip)+vmread(vm_exit_instructionlength));
+
+  if (vmcsinvvpiderror)
+  {
+    sendstringf("invept error");
+    if (vmcsinvvpiderrorcode==1)
+      VMfailInvalid();
+    else
+    {
+      VMfailValid(currentcpuinfo, vmcsinvvpiderrorcode);
+      sendstringf("%d", vmcsinvvpiderrorcode);
+    }
+
+    sendstring("\n");
+  }
+  else
+    vmsucceed();
+
+  return 0;
 }
 
 
@@ -600,6 +778,12 @@ int handle_vmread(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
 
 
   sendstring("handle_vmread\n");
+  if (currentcpuinfo->vmxdata.insideVMXRootMode==0)
+  {
+    sendstringf("invalid mode\n");
+    return raiseInvalidOpcodeException(currentcpuinfo);
+  }
+
 
   if (currentcpuinfo->vmxdata.guest_activeVMCS==0xffffffffffffffffULL)
   {
@@ -779,6 +963,9 @@ int handle_vmwrite(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
 
   sendstring("handle_vmwrite\n");
 
+  if (currentcpuinfo->vmxdata.insideVMXRootMode==0)
+    return raiseInvalidOpcodeException(currentcpuinfo);
+
   if (currentcpuinfo->vmxdata.guest_activeVMCS==0xffffffffffffffffULL)
   {
     VMfailInvalid();
@@ -944,14 +1131,8 @@ int handle_vmptrld(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
   unmapVMmemory(mapped, 8);
 
 
-  if (dbvm_originalhoststate==NULL) //one time init
-  {
-    sendstring("generating dbvm_originalhoststate\n");
-    dbvm_originalhoststate=malloc2(sizeof(vmxhoststate)); //no free ever
-    getHostState(dbvm_originalhoststate);
-
-    sendstringf("CR3=%6\n", dbvm_originalhoststate->CR3);
-  }
+  if (currentcpuinfo->vmxdata.dbvmhoststate.FS_BASE==0) //only needs one time init
+    getHostState((vmxhoststate *)&currentcpuinfo->vmxdata.dbvmhoststate);
 
   vmwrite(vm_guest_rip,vmread(vm_guest_rip)+vmread(vm_exit_instructionlength));
 
@@ -972,14 +1153,16 @@ int handle_vmptrld(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
       if (r)
       {
         sendstringf("restore: vmptrld failed: %d (error=%d)\n", vmread(vm_errorcode));
+        ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
         while (1);
       }
     }
     else
     {
       sendstringf("restore: vmptrld failed: %d (error=%d)\n", vmread(vm_errorcode));
-      VMfailInvalid();
-      return 0;
+      //VMfailInvalid();
+      //return 0;
+      //it's a load, the old state could have been deleted
     }
   }
 
@@ -1023,14 +1206,16 @@ int handle_vmptrld(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
 
   //change the hoststate so it exits on dbvm
   sendstring("Editing the guest vmcs state so it exits on this host\n");
-  setHostState(dbvm_originalhoststate);
+  setHostState((vmxhoststate *)&currentcpuinfo->vmxdata.dbvmhoststate);
 
+  //debug code, can go
   vmxhoststate debugstate;
   getHostState(&debugstate);
 
   if (debugstate.CR3!=getCR3())
   {
     sendstringf("wrong cr3 was set in the hoststate");
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
     while (1);
   }
 
@@ -1106,6 +1291,9 @@ int handle_vmxon(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
 int handle_vmxoff(pcpuinfo currentcpuinfo, VMRegisters *vmregisters UNUSED)
 {
   sendstringf("handle_vmxoff\n");
+  if (currentcpuinfo->vmxdata.insideVMXRootMode==0)
+    return raiseInvalidOpcodeException(currentcpuinfo);
+
 
   if (currentcpuinfo->vmxdata.guest_activeVMCS!=0xffffffffffffffff) //if there is an old VMCS, restore the hoststate with the original first
   {
@@ -1131,49 +1319,71 @@ int handle_vmxoff(pcpuinfo currentcpuinfo, VMRegisters *vmregisters UNUSED)
 
 
 
+
 int handleIntelVMXInstruction(pcpuinfo currentcpuinfo, VMRegisters *vmregisters)
 {
-
+  int r;
   sendstringf("handleIntelVMXInstruction. emulatevmx=%d\n", emulatevmx);
   if (emulatevmx==0)
     return raiseInvalidOpcodeException(currentcpuinfo);
   else
   {
     //try to handle it
+
     int exit_reason=currentcpuinfo->guest_error?currentcpuinfo->guest_error:vmread(vm_exit_reason) & 0x7fffffff;
     currentcpuinfo->guest_error=0;
     currentcpuinfo->vmxdata.currenterrorcode=0;
 
-    switch (exit_reason)
+
+
+    try
     {
-    /*
-19 VMCLEAR. Guest software attempted to execute VMCLEAR.
-20 VMLAUNCH. Guest software attempted to execute VMLAUNCH.
-21 VMPTRLD. Guest software attempted to execute VMPTRLD.
-22 VMPTRST. Guest software attempted to execute VMPTRST.
-23 VMREAD. Guest software attempted to execute VMREAD.
-24 VMRESUME. Guest software attempted to execute VMRESUME.
-25 VMWRITE. Guest software attempted to execute VMWRITE.
-26 VMXOFF. Guest software attempted to execute VMXOFF.
-27 VMXON. Guest software attempted to execute VMXON.
-     */
-      case 19: return handle_vmclear(currentcpuinfo, vmregisters);
-      case 20: return handle_vmlaunch(currentcpuinfo, vmregisters);
-      case 0xce00: return handle_vmlaunchFail(currentcpuinfo);
-      case 21: return handle_vmptrld(currentcpuinfo, vmregisters);
-      case 22: return handle_vmptrst(currentcpuinfo, vmregisters);
-      case 23: return handle_vmread(currentcpuinfo, vmregisters);
-      case 24: return handle_vmresume(currentcpuinfo, vmregisters);
-      case 0xce01: return handle_vmresumeFail(currentcpuinfo);
-      case 25: return handle_vmwrite(currentcpuinfo, vmregisters);
-      case 26: return handle_vmxoff(currentcpuinfo, vmregisters);
-      case 27: return handle_vmxon(currentcpuinfo, vmregisters);
-      default:
+
+      switch (exit_reason)
       {
-        sendstringf("vmxemu.c: Invalid exit_reason: %d\n", exit_reason);
-        return 1;
+      /*
+  19 VMCLEAR. Guest software attempted to execute VMCLEAR.
+  20 VMLAUNCH. Guest software attempted to execute VMLAUNCH.
+  21 VMPTRLD. Guest software attempted to execute VMPTRLD.
+  22 VMPTRST. Guest software attempted to execute VMPTRST.
+  23 VMREAD. Guest software attempted to execute VMREAD.
+  24 VMRESUME. Guest software attempted to execute VMRESUME.
+  25 VMWRITE. Guest software attempted to execute VMWRITE.
+  26 VMXOFF. Guest software attempted to execute VMXOFF.
+  27 VMXON. Guest software attempted to execute VMXON.
+       */
+        case 19: r=handle_vmclear(currentcpuinfo, vmregisters); break;
+        case 20: r=handle_vmlaunch(currentcpuinfo, vmregisters); break;
+        case 0xce00: r=handle_vmlaunchFail(currentcpuinfo); break;
+        case 21: r=handle_vmptrld(currentcpuinfo, vmregisters); break;
+        case 22: r=handle_vmptrst(currentcpuinfo, vmregisters); break;
+        case 23: r=handle_vmread(currentcpuinfo, vmregisters); break;
+        case 24: r=handle_vmresume(currentcpuinfo, vmregisters); break;
+        case 0xce01: r=handle_vmresumeFail(currentcpuinfo); break;
+        case 25: r=handle_vmwrite(currentcpuinfo, vmregisters); break;
+        case 26: r=handle_vmxoff(currentcpuinfo, vmregisters); break;
+        case 27: r=handle_vmxon(currentcpuinfo, vmregisters); break;
+        case vm_exit_invept:  r=handle_invept(currentcpuinfo, vmregisters); break;
+        case vm_exit_invvpid: r=handle_invvpid(currentcpuinfo, vmregisters); break;
+        default:
+        {
+          sendstringf("vmxemu.c: Invalid exit_reason: %d\n", exit_reason);
+          return 1;
+        }
       }
     }
+    except
+    {
+      int err=lastexception;
+
+      sendstringf("Something shitty happened when emulating VMX (%6: %d)\n", ExceptionRIP, err);
+      ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+
+      while (1);
+    }
+    tryend
+
+    return r;
 
   }
 }

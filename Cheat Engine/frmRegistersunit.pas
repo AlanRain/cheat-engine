@@ -5,7 +5,13 @@ unit frmRegistersunit;
 interface
 
 uses
-  win32proc, jwawindows, windows, LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport, LCLProc, math,
+  {$endif}
+  {$ifdef windows}
+  win32proc, jwawindows, windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, Buttons, ExtCtrls, StdCtrls, frmFloatingPointPanelUnit, NewKernelHandler,
   cefuncproc, LResources,Clipbrd, Menus, frmStackViewunit;
 
@@ -23,6 +29,7 @@ type
     EIPlabel: TLabel;
     ESIlabel: TLabel;
     ESPlabel: TLabel;
+    rImageList: TImageList;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
     Panel1: TPanel;
@@ -286,9 +293,10 @@ begin
   panel3.Font.Height:=i;
 
 
-  widthneeded:=canvas.TextWidth(' '+caption+' ');
+  widthneeded:=canvas.TextWidth('XX  '+caption+'  XX');
   constraints.MinWidth:=widthneeded;
 
+  {$ifdef windows}
   if WindowsVersion>=wvVista then
   begin
     tbi.cbSize:=sizeof(tbi);
@@ -308,6 +316,7 @@ begin
     if i<widthneeded then
       Width:=width+(widthneeded-i);
   end;
+  {$endif}
 
 
 end;

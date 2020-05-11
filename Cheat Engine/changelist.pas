@@ -10,7 +10,15 @@ it keeps a list of entries containing lastvalue and timestamp of the last time i
 interface
 
 uses
-  windows, Classes, SysUtils;
+{$IFNDEF STANDALONEHV}
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+{$ENDIF}
+  Classes, SysUtils;
 
 type TChangeList=class
   private

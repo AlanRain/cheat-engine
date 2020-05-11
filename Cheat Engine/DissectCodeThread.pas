@@ -5,7 +5,13 @@ unit DissectCodeThread;
 interface
 
 uses
-  windows, LCLIntf,sysutils,syncobjs,Classes,disassembler, NewKernelHandler, math,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf,sysutils,syncobjs,Classes,disassembler, NewKernelHandler, math,
   MemoryQuery, CEFuncProc, maps, LastDisassembleData, commonTypeDefs;
 
 
@@ -15,6 +21,8 @@ type
     maxsize: integer;
     a: PPtrUintArray;
     isstring: boolean;
+    pointsto: ptruint; //0 if not a pointer
+    pointstostring: boolean;
   end;
   PAddresslist=^TAddresslist;
 
@@ -44,6 +52,7 @@ type TStringReference=class(tobject)
   address: ptrUint;
   s: string;
   references: array of ptrUint;
+  isUnicode: boolean;
 end;
 
 type TDissectReference=class(tobject)
@@ -55,7 +64,7 @@ type TDissectReference=class(tobject)
     end;
 end;
 
-
+type TOnCallListEntry=procedure(address: ptruint);
 
 type
   TDissectCodeThread = class(TThread)
@@ -74,7 +83,7 @@ type
     canceled: boolean;
 
 
-    function isstring(address: ptrUint): boolean;
+    function isstring(address: ptrUint; v: pqword=nil): boolean;
     function findaddress(list: TMap; address: ptrUint):PAddresslist;
     procedure clearList(list: Tmap);
     procedure saveListToStream(list: TMap; s: TStream);
@@ -117,6 +126,8 @@ type
 
     procedure getstringlist(s: tstrings);
     procedure getCallList(s: TList);
+
+//    procedure getCallListEx(callback: TOnCallListEntry);
     constructor create(suspended: boolean);
   protected
     procedure Execute; override;
@@ -560,6 +571,7 @@ end;
 procedure TDissectCodeThread.addAddress(list: TMap; address: ptrUint; referencedBy: ptruint; couldbestring: boolean=false);
 var
   al: PAddresslist;
+  v: qword;
 begin
 
   cs.enter;
@@ -569,7 +581,20 @@ begin
       //not in the list yet, add it
       getmem(al, sizeof(TAddresslist));
       ZeroMemory(al, sizeof(TAddresslist));
-      if couldbestring then al.isstring:=isString(address);
+      if couldbestring then
+      begin
+        v:=0;
+        al.isstring:=isString(address, @v);
+
+        if (al.isstring=false) and (v<>0) then
+        begin
+          if isAddress(v) then
+          begin
+            al.pointsto:=v;
+            al.pointstostring:=isString(v,nil);
+          end;
+        end;
+      end;
 
       //allocate some space for it
       al.maxsize:=2;
@@ -577,6 +602,11 @@ begin
 
       list.Add(address, al);
     end;
+
+    if (couldbestring) and (al.isstring=false) and (al.pointstostring) then
+      addAddress(list, al.pointsto,referencedby,couldbestring); //add pointers to pointers to strings
+
+    //might also be used for function references...
 
     if al.pos>=al.maxsize then //realloc
     begin
@@ -595,9 +625,10 @@ begin
 
 end;
 
-function TDissectCodeThread.isstring(address: ptrUint): boolean;
+function TDissectCodeThread.isstring(address: ptrUint; v: pqword=nil): boolean;
 var
-  tempbuf: array [0..7] of byte;
+  p: qword;
+  tempbuf: array [0..7] of byte absolute p;
   x: ptruint;
   i: integer;
 begin
@@ -615,14 +646,14 @@ begin
       end;
     end;
 
-    if true then exit;
+    if result then exit;
 
     //check if unicode string
     i:=0;
     result:=true;
     while i<8 do
     begin
-      if not (tempbuf[i] in [32..127]) then
+      if not ((tempbuf[i] in [32..127]) and (tempbuf[i+1]=0)) then
       begin
         result:=false;
         break;
@@ -630,7 +661,16 @@ begin
       inc(i,2);
     end;
 
+    if v<>nil then
+    begin
+      if processhandler.is64Bit then
+        p:=p and $ffffffff;
+
+      v^:=p;
+    end;
   end;
+
+
 end;
 
 
@@ -694,6 +734,7 @@ begin
   try
     d.showsymbols:=false;
     d.showmodules:=false;
+    d.aggressivealignment:=true;
 
     while not terminated do
     begin

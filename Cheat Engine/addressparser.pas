@@ -4,7 +4,9 @@ unit addressparser;
 
 interface
 
-uses LCLIntf,SysUtils,dialogs,symbolhandler, NewKernelHandler;
+uses
+  {$ifdef darwin}macport,{$endif}
+  LCLIntf,SysUtils,dialogs,symbolhandler, NewKernelHandler;
 
 resourcestring
   rsAPThisIsNotAValidAddress = 'This is not a valid address';
@@ -340,8 +342,11 @@ begin
   maxvalue:=0;
   for i:=0 to length(values)-1 do
   begin
-    if maxvalue<ptruint(values[i]) then
-      maxvalue:=ptruint(values[i]);
+    if values[i]>0 then
+    begin
+      if maxvalue<ptruint(values[i]) then
+        maxvalue:=ptruint(values[i]);
+    end;
   end;
 
   result:=maxvalue;

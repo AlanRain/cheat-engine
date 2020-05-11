@@ -27,7 +27,7 @@
 
 
 #ifdef __i386__
-  typedef struct pt_regs CONTEXT_REGS;
+  typedef struct user_regs_struct CONTEXT_REGS;
 #endif
 
 #ifdef __x86_64__
@@ -51,5 +51,5 @@ typedef struct
 
 
 int getRegisters(int tid, CONTEXT_REGS *registerstore);
-
+int setRegisters(int tid, CONTEXT_REGS *registerstore);
 #endif /* CONTEXT_H_ */

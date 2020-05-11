@@ -7,11 +7,19 @@ unit debugeventhandler;
 interface
 
 uses
-  jwawindows, Windows, Classes, SysUtils, syncobjs, GuiSafeCriticalSection,
-  disassembler, cefuncproc, newkernelhandler,debuggertypedefinitions, frmTracerUnit,
-  DebuggerInterfaceAPIWrapper, LuaHandler, lua, lauxlib, lualib, win32proc, tracerIgnore;
+  {$ifdef darwin}
+  macport, lclproc,
+  {$endif}
+  {$ifdef windows}
+  jwawindows, Windows, win32proc,
+  {$endif}
+  Classes, SysUtils, syncobjs, GuiSafeCriticalSection,
+  disassembler, CEFuncProc, newkernelhandler,debuggertypedefinitions, frmTracerUnit,
+  DebuggerInterfaceAPIWrapper, lua, lauxlib, lualib,
+  tracerIgnore, BreakpointTypeDef;
 
 type
+  TContextFields=(cfAll,cfDebug, cfRegisters, cfFloat);
   TDebugEventHandler = class;
 
   TDebugThreadHandler = class
@@ -25,6 +33,7 @@ type
     threadlist: TList;
     breakpointList: TList;
     continueOption: TContinueOption;
+    continueHandled: boolean;
 
     setInt3Back: boolean;
     Int3setbackAddress: ptrUint;
@@ -37,6 +46,9 @@ type
 
     singlestepping: boolean;
 
+    isBranchMapping: boolean;
+    branchMappingDisabled: qword;
+
     //break and trace:
     isTracing: boolean;
     tracecount: integer;
@@ -45,6 +57,9 @@ type
     traceStepOver: boolean; //perhaps also trace branches ?
     traceNoSystem: boolean;
     //------------------
+
+    unhandledException: boolean;
+    unhandledExceptionCode: dword;
 
     WaitingToContinue: boolean; //set to true when it's waiting for the user to continue
 
@@ -56,6 +71,7 @@ type
 
 
     currentBP: PBreakpoint;
+
 
     function CheckIfConditionIsMet(bp: PBreakpoint; script: string=''): boolean;
     function InNoBreakList: boolean;
@@ -78,9 +94,11 @@ type
 
     procedure ModifyRegisters(bp: PBreakpoint);
     procedure TraceWindowAddRecord;
+    procedure removeAllTracerStepOverBreakpoints;
     procedure handleTrace;
-    procedure HandleBreak(bp: PBreakpoint);
-    procedure ContinueFromBreakpoint(bp: PBreakpoint; continueoption: TContinueOption);
+    procedure mapBranch;
+    procedure HandleBreak(bp: PBreakpoint; var dwContinueStatus: dword);
+    procedure ContinueFromBreakpoint(bp: PBreakpoint; continueoption: TContinueOption; isTracerStepOver: boolean=false);
     function EnableOriginalBreakpointAfterThisBreakpointForThisThread(bp: Pbreakpoint; OriginalBreakpoint: PBreakpoint): boolean;
 
     //sync functions
@@ -102,20 +120,24 @@ type
 
 
     procedure UpdateMemoryBrowserContext;
-
+    procedure StartBranchMap;
+    procedure StopBranchMap;
     procedure TracerQuit;
     procedure suspend;
     procedure resume;
     procedure fillContext;
-    procedure setContext;
+    procedure setContext(fields: TContextFields=cfall);
     procedure breakThread;
     procedure clearDebugRegisters;
-    procedure continueDebugging(continueOption: TContinueOption);
+    procedure continueDebugging(continueOption: TContinueOption; handled: boolean=true);
+
     constructor Create(debuggerthread: TObject; attachEvent: Tevent; continueEvent: Tevent; breakpointlist: TList; threadlist: Tlist; debuggerCS: TGuiSafeCriticalSection);
     destructor destroy; override;
 
     property isSingleStepping: boolean read singlestepping;
     property isWaitingToContinue: boolean read WaitingToContinue;
+    property isUnhandledException: boolean read unhandledException;
+    property lastUnhandledExceptionCode: dword read unhandledExceptionCode;
   end;
 
   TDebugEventHandler = class
@@ -140,7 +162,8 @@ implementation
 uses foundcodeunit, DebugHelper, MemoryBrowserFormUnit, frmThreadlistunit,
      WindowsDebugger, VEHDebugger, KernelDebuggerInterface, NetworkDebuggerInterface,
      frmDebugEventsUnit, formdebugstringsunit, symbolhandler,
-     networkInterface, networkInterfaceApi, ProcessHandlerUnit, globals;
+     networkInterface, networkInterfaceApi, ProcessHandlerUnit, globals,
+     UnexpectedExceptionsHelper, frmcodefilterunit, frmBranchMapperUnit, LuaHandler;
 
 resourcestring
   rsDebugHandleAccessViolationDebugEventNow = 'Debug HandleAccessViolationDebugEvent now';
@@ -210,6 +233,13 @@ end;
 
 procedure TDebugThreadHandler.VisualizeBreak;
 begin
+  WaitingToContinue:=true;
+
+
+  Outputdebugstring('HandleBreak()');
+
+  onContinueEvent.ResetEvent;
+
   TDebuggerthread(debuggerthread).execlocation:=41;
   UpdateMemoryBrowserContext;
 
@@ -228,7 +258,9 @@ begin
   if WaitingToContinue then //no lua script or it returned 0
   begin
     TDebuggerthread(debuggerthread).execlocation:=413;
-    MemoryBrowser.UpdateDebugContext(self.Handle, self.ThreadId);
+
+
+    MemoryBrowser.UpdateDebugContext(self.Handle, self.ThreadId, true, TDebuggerthread(debuggerthread));
   end;
   TDebuggerthread(debuggerthread).execlocation:=414;
 
@@ -269,7 +301,7 @@ begin
 
 end;
 
-procedure TDebugThreadHandler.setContext;
+procedure TDebugThreadHandler.setContext(fields: TContextFields=cfAll);
 var
   i: integer;
 begin
@@ -278,7 +310,18 @@ begin
   if handle<>0 then
   begin
     debuggercs.enter;
-    context^.ContextFlags := CONTEXT_ALL or CONTEXT_EXTENDED_REGISTERS;
+
+    {$ifdef windows}
+    fields:=cfall; //just for vehdebug
+    {$endif};
+
+
+    case fields of
+      cfAll: context^.ContextFlags := CONTEXT_ALL or CONTEXT_EXTENDED_REGISTERS;
+      cfDebug: context^.ContextFlags := CONTEXT_DEBUG_REGISTERS;
+      cfFloat: context^.ContextFlags := CONTEXT_FLOATING_POINT or CONTEXT_EXTENDED_REGISTERS;
+      cfRegisters: context^.ContextFlags := CONTEXT_INTEGER or CONTEXT_CONTROL or CONTEXT_SEGMENTS;
+    end;
 
     //context.dr7:=context.dr7 or $300;
 
@@ -330,7 +373,7 @@ begin
   context^.dr7:=0;
   SingleStepping:=true;
 
-  setContext;
+  setContext(cfDebug);
   resume;
   debuggercs.leave;
 end;
@@ -341,6 +384,11 @@ begin
 end;
 
 procedure TDebugThreadHandler.ModifyRegisters(bp: PBreakpoint);
+var
+  fplist: PRegisterModificationFloatList;
+  i,j: integer;
+  b: byte;
+  n: pointer;
 begin
   TDebuggerthread(debuggerthread).execlocation:=36;
   if bp.changereg.change_af then context^.EFlags:=eflags_setAF(context^.Eflags, booltoint(bp.changereg.new_af));
@@ -369,13 +417,58 @@ begin
   if bp.changereg.change_r14 then context^.r14:=bp.changereg.new_r14;
   if bp.changereg.change_r15 then context^.r15:=bp.changereg.new_r15;
   {$endif}
+
+  if bp.changereg.change_FP<>0 then
+  begin
+    b:=bp.changereg.change_FP;
+    for i:=0 to 7 do
+    begin
+      if b and (1 shl i)>0 then
+      begin
+        n:=pointer(ptruint(@bp.changereg.new_FP0)+8*i);
+        {$ifdef cpu64}
+        copymemory(@context^.FltSave.FloatRegisters[i], n,10);
+        {$else}
+        copymemory(@context^.ext.FPURegisters[i], n,10);
+        copymemory(@context^.FloatSave.RegisterArea[10*i], n,10);
+        {$endif}
+      end;
+    end;
+  end;
+
+  if bp.changereg.change_XMM<>0 then
+  begin
+    for i:=0 to {$ifdef cpu64}15{$else}7{$endif} do
+    begin
+      //get the nibble for the xmm register
+      b:=(bp.changereg.change_XMM shl (i*4)) and $f;
+
+      if b>0 then //bits are set
+      begin
+        for j:=0 to 3 do
+        begin
+          if b and (1 shl j)>0 then //bit is set
+          begin
+            //change part j of xmm register i
+            {$ifdef cpu64}
+            PXMMFIELDS(@context^.FltSave.XmmRegisters[i])^[j]:=PXMMFIELDS(ptruint(@bp.changereg.new_XMM0)+16*i)^[j];
+            {$else}
+            PXMMFIELDS(@context^.ext.XMMRegisters.LegacyXMM[j])^[j]:=bp.changereg.new_XMM0[j];
+            {$endif}
+          end;
+        end;
+      end;
+    end;
+  end;
+
 end;
 
-procedure TDebugThreadHandler.continueDebugging(continueOption: TContinueOption);
+procedure TDebugThreadHandler.continueDebugging(continueOption: TContinueOption; handled: boolean=true);
 begin
   if WaitingToContinue then
   begin
     self.continueOption:=continueOption;
+    self.ContinueHandled:=handled;
     onContinueEvent.SetEvent;
   end;
 
@@ -394,7 +487,7 @@ begin
   debuggercs.leave;
 end;
 
-procedure TDebugThreadHandler.ContinueFromBreakpoint(bp: PBreakpoint; continueoption: TContinueOption);
+procedure TDebugThreadHandler.ContinueFromBreakpoint(bp: PBreakpoint; continueoption: TContinueOption; isTracerStepOver: boolean=false);
 {
 Continues the current thread from a debug event. Handles int3 breakpoints as well
 BP can be nil if it's a single step breakpoint
@@ -551,6 +644,10 @@ begin
       co_stepinto, co_stepover:
       begin
         //single step
+        if (CurrentDebuggerInterface is TNetworkDebuggerInterface) then
+        begin
+          TNetworkDebuggerInterface(CurrentDebuggerInterface).SingleStepNextContinue:=true;
+        end;
         singlestepping:=true;
         if (bp=nil) or (bp.breakpointMethod=bpmDebugRegister) then
           context^.EFlags:=eflags_setRF(context^.EFlags,1);//don't break on the current instruction
@@ -569,6 +666,7 @@ begin
             setContext;
             b:=TDebuggerthread(debuggerthread).SetOnExecuteBreakpoint(nexteip , false, ThreadId);
             b.OneTimeOnly:=true;
+            b.isTracerStepOver:=isTracerStepOver;
           end
           else  //if not, single step
             context^.EFlags:=eflags_setTF(context^.EFlags,1);
@@ -599,7 +697,7 @@ begin
       if bp.breakpointMethod=bpmDebugRegister then
       begin
         context^.Dr6:=0;  //unset breakpoint relies on this being 0 of ffff0ff0 is handled
-        setContext;
+        setContext(cfDebug);
         TdebuggerThread(debuggerthread).UnsetBreakpoint(bp, context, threadid);
       end;
     end;
@@ -608,8 +706,53 @@ begin
   end;
 end;
 
+procedure TDebugThreadHandler.mapBranch;
+var hasid: boolean;
+  b: byte=0;
+begin
+  if isBranchMapping and (frmBranchMapper<>nil) then
+  begin
+    frmBranchMapper.mapmrew.beginread;
+    hasid:=frmBranchMapper.map.hasID(context^.{$ifdef cpu64}rip{$else}eip{$endif});
+    frmBranchMapper.mapmrew.endread;
+
+    if branchMappingDisabled=0 then
+      context^.EFlags:=eflags_setTF(context^.EFlags,1);
 
 
+
+    if hasid then exit;
+
+    frmBranchMapper.mapmrew.beginwrite;
+    if frmBranchMapper.map.hasID(context^.{$ifdef cpu64}rip{$else}eip{$endif})=false then
+      frmBranchMapper.map.Add(context^.{$ifdef cpu64}rip{$else}eip{$endif},b);
+
+    frmBranchMapper.mapmrew.endwrite;
+  end;
+end;
+
+procedure TDebugThreadHandler.StartBranchMap;
+begin
+  suspend;
+  fillContext;
+  context^.Dr7:=context^.Dr7 or $300;
+  context^.EFlags:=context^.EFlags or EFLAGS_TF;
+  setContext;
+  isBranchMapping:=true;
+  branchMappingDisabled:=0;
+  resume;
+end;
+
+procedure TDebugThreadHandler.StopBranchMap;
+begin
+  suspend;
+  fillContext;
+  context^.Dr7:=context^.Dr7 and (not $300);
+  context^.EFlags:=context^.EFlags and (not EFLAGS_TF);
+  setContext;
+  branchMappingDisabled:=getTickCount64;
+  resume;
+end;
 
 procedure TDebugThreadHandler.TracerQuit;
 begin
@@ -619,7 +762,6 @@ begin
   begin
     fillContext;
     context^.EFlags:=eflags_setTF(context^.EFlags,0); //unsef TF
-    setContext;
   end;
 
   TDebuggerthread(debuggerthread).execlocation:=45;
@@ -629,6 +771,20 @@ procedure TDebugThreadHandler.TraceWindowAddRecord;
 begin
   if traceWindow<>nil then
     tracewindow.addRecord;
+end;
+
+procedure TDebugThreadHandler.removeAllTracerStepOverBreakpoints;
+var
+  i: integer;
+  bpp: PBreakpoint;
+begin
+  OutputDebugString('Deleting all tracer stepover breakpoints');
+  for i := 0 to breakpointlist.Count - 1 do
+  begin
+    bpp:=breakpointlist[i];
+    if bpp^.isTracerStepOver then
+       TdebuggerThread(debuggerthread).RemoveBreakpoint(bpp);
+  end;
 end;
 
 procedure TDebugThreadHandler.handleTrace;
@@ -641,7 +797,9 @@ var
 begin
   if tracewindow=nil then
   begin
+    OutputDebugString('Tracewindow closed. Stopping tracer');
     isTracing:=false;
+
     ContinueFromBreakpoint(nil, co_run);
     exit;
   end;
@@ -677,7 +835,7 @@ begin
         if tracewindow<>nil then
           TDebuggerthread(debuggerthread).Synchronize(TDebuggerthread(debuggerthread), tracewindow.Finish);
 
-        OutputDebugString('CheckIfConditionIsMet=true');
+        OutputDebugString('CheckIfConditionIsMet=true. Stopping tracer');
         ContinueFromBreakpoint(nil, co_run);
         isTracing:=false;
 
@@ -701,7 +859,7 @@ begin
     begin
       TDebuggerthread(debuggerthread).execlocation:=377;
       if tracestepover then
-        ContinueFromBreakpoint(nil, co_stepover)
+        ContinueFromBreakpoint(nil, co_stepover, true)
       else
         ContinueFromBreakpoint(nil, co_stepinto);
     end;
@@ -709,7 +867,7 @@ begin
   else
   begin
     TDebuggerthread(debuggerthread).execlocation:=378;
-    //outputdebugstring('tracecount=0');
+    outputdebugstring('tracecount=0 stopping tracer');
     if tracewindow<>nil then
     begin
       TDebuggerthread(debuggerthread).execlocation:=379;
@@ -723,17 +881,13 @@ begin
   end;
 end;
 
-procedure TDebugThreadHandler.HandleBreak(bp: PBreakpoint);
+procedure TDebugThreadHandler.HandleBreak(bp: PBreakpoint; var dwContinueStatus: dword);
 begin
   TDebuggerthread(debuggerthread).execlocation:=38;
-  WaitingToContinue:=true;
 
 
-  Outputdebugstring('HandleBreak()');
+  //synchronize(VisualizeBreak);
   //go to sleep and wait for an event that wakes it up. No need to worry about deleted breakpoints, since the cleanup will not be called untill this routine exits
-  onContinueEvent.ResetEvent;
-
-
   TDebuggerthread(debuggerthread).synchronize(TDebuggerthread(debuggerthread), VisualizeBreak);
 
   if WaitingToContinue then
@@ -742,6 +896,11 @@ begin
     onContinueEvent.WaitFor(infinite);
     //Outputdebugstring('returned from gui');
   end;
+
+  if continueHandled then
+    dwContinueStatus:=DBG_CONTINUE
+  else
+    dwContinueStatus:=DBG_EXCEPTION_NOT_HANDLED;
 
   WaitingToContinue:=false;
   continueFromBreakpoint(bp, continueOption);
@@ -763,6 +922,7 @@ begin
 
 
   {$ifdef cpu32}
+  hasSetInt1Back:=false;
   if not (CurrentDebuggerInterface is TKernelDebugInterface) then
   begin
     if setint1back then
@@ -772,9 +932,7 @@ begin
       setInt1Back:=false;
       hasSetInt1Back:=true;
       dwContinueStatus:=DBG_CONTINUE;
-    end
-    else
-      hasSetInt1Back:=false;
+    end;
   end;
 
   {$endif}
@@ -795,17 +953,42 @@ begin
     dwContinueStatus:=DBG_CONTINUE;
   end else hasSetInt3Back:=false;
 
+  if isBranchMapping then
+  begin
+    MapBranch;
+  end
+  else
   if isTracing then
   begin
+    outputdebugstring('Tracing is true so handle as a trace event');
     handleTrace;
+    if isTracing=false then
+    begin
+      outputdebugstring('Tracing has ended');
+      removeAllTracerStepOverBreakpoints;
+    end;
   end
   else
   if singlestepping then
   begin
-    handlebreak(nil);
+    handlebreak(nil, dwContinueStatus);
   end
   else
   begin
+    //no known single step happening
+
+    {$ifdef windows}
+    if (CurrentDebuggerInterface is TKernelDebugInterface) then
+    begin
+      //could be dbvm
+      if TKernelDebugInterface(CurrentDebuggerInterface).EventCausedByDBVM then
+      begin
+        handlebreak(nil, dwContinueStatus);
+        exit;
+      end;
+    end;
+    {$endif}
+
     if (not (hasSetInt3Back {$ifdef cpu32} or hasSetInt1Back{$endif})) then
     begin
       OutputDebugString('Not handled');
@@ -866,38 +1049,47 @@ begin
   //check if it's an expected breakpoint
   //if not, DBG_EXCEPTION_NOT_HANDLED
 
-
-
-
+  active:=false;
   bpp2:=nil;
+  bpp:=nil;
 
-  debuggercs.enter;
-
-  for i := 0 to breakpointlist.Count - 1 do
+  if (debugreg=-1) and (frmCodeFilter<>nil) and frmCodeFilter.handleBreakpoint(address) then  //callfilter
   begin
-    bpp:=PBreakpoint(breakpointlist.Items[i]);
-
-    if InRangeX(address, bpp.address, bpp.address+bpp.size-1) then
-    begin
-      if (CurrentDebuggerInterface.canReportExactDebugRegisterTrigger) and (debugreg in [0..4]) and (bpp.breakpointMethod=bpmDebugRegister) and (bpp.debugRegister<>debugreg) then
-        continue; //this is not the correct breakpoint. Skip it
-
-
-      found:=true;
-      bpp2:=bpp;
-      active:=bpp^.active;
-
-      if bpp^.OneTimeOnly then //delete it
-        TdebuggerThread(debuggerthread).RemoveBreakpoint(bpp);
-
-      if ((bpp.breakpointMethod=bpmException) and (not bpp.markedfordeletion)) or active then
-        break;
-
-      //else continue looking for one that IS active and not deleted
-    end;
+    dwContinueStatus:=DBG_CONTINUE;
+    exit(true);
   end;
 
-  debuggercs.leave;
+  if not found then
+  begin
+    debuggercs.enter;
+
+    for i := 0 to breakpointlist.Count - 1 do
+    begin
+      bpp:=PBreakpoint(breakpointlist.Items[i]);
+
+      if InRangeX(address, bpp.address, bpp.address+bpp.size-1) then
+      begin
+        if (CurrentDebuggerInterface.canReportExactDebugRegisterTrigger) and (debugreg in [0..4]) and (bpp.breakpointMethod=bpmDebugRegister) and (bpp.debugRegister<>debugreg) then
+          continue; //this is not the correct breakpoint. Skip it
+
+
+        found:=true;
+        bpp2:=bpp;
+        active:=bpp^.active;
+
+        if active and bpp^.OneTimeOnly then //mark for deletion
+          TdebuggerThread(debuggerthread).RemoveBreakpoint(bpp);
+
+        if ((bpp.breakpointMethod=bpmException) and (not bpp.markedfordeletion)) or active then
+          break;
+
+        //else continue looking for one that IS active and not deleted
+      end;
+    end;
+
+    debuggercs.leave;
+
+  end;
 
   TDebuggerthread(debuggerthread).execlocation:=27;
 
@@ -924,7 +1116,26 @@ begin
 
     if isTracing then
     begin
+      outputdebugstring('isTracing');
       handleTrace;
+      if istracing=false then
+      begin
+        outputdebugstring('trace has ended');
+        removeAllTracerStepOverBreakpoints;
+      end;
+
+      dwContinueStatus:=DBG_CONTINUE;
+      Result:=true;
+      exit;
+    end;
+
+    outputdebugstring('not tracing');
+
+    if currentBP.isTracerStepOver then
+    begin
+      outputdebugstring('dangling stepover BP detected');
+      TdebuggerThread(debuggerthread).RemoveBreakpoint(bpp); //just being sure
+
       dwContinueStatus:=DBG_CONTINUE;
       Result:=true;
       exit;
@@ -932,8 +1143,7 @@ begin
 
 
 
-
-    if (InNoBreakList) or ((bpp.OneTimeOnly=false) and (((bpp.breakpointMethod<>bpmException) and (not active)) or (not CheckIfConditionIsMet(bpp) or (bpp.markedfordeletion) ))) then
+    if (InNoBreakList) or ((bpp^.OneTimeOnly=false) and (((bpp^.breakpointMethod<>bpmException) and (not active)) or (not CheckIfConditionIsMet(bpp) or (bpp.markedfordeletion) ))) then
     begin
       TDebuggerthread(debuggerthread).execlocation:=28;
       OutputDebugString('bp was disabled or Condition was not met');
@@ -948,7 +1158,7 @@ begin
       if bpp.active=false then
       begin
         TdebuggerThread(debuggerthread).UnsetBreakpoint(bpp, context);  //make sure it's disabled
-        setcontext;
+        setcontext(cfDebug);
       end;
 
       needstocleanup:=true;
@@ -977,7 +1187,7 @@ begin
 
         debuggercs.leave;
 
-        HandleBreak(bpp); //cause break in memory browser at address
+        HandleBreak(bpp, dwContinueStatus); //cause break in memory browser at address
       end;
 
       bo_BreakAndTrace:
@@ -1056,6 +1266,7 @@ begin
     dwContinueStatus:=DBG_CONTINUE;
   end else
   begin
+    OutputDebugString('Not a specified breakpoint');
     TDebuggerthread(debuggerthread).execlocation:=34;
     if (setint1back) and (address<>0) then
     begin
@@ -1074,31 +1285,49 @@ begin
 
 
     OutputDebugString('Unexpected breakpoint');
+    {$ifdef windows}
     if not (CurrentDebuggerInterface is TKernelDebugInterface) then
+    {$endif}
     begin
-      onAttachEvent.SetEvent;
 
-      if TDebuggerthread(debuggerthread).InitialBreakpointTriggered then
-        dwContinueStatus:=DBG_EXCEPTION_NOT_HANDLED
-      else
+      dwContinueStatus:=DBG_EXCEPTION_NOT_HANDLED;
+
+      if TDebuggerthread(debuggerthread).InitialBreakpointTriggered=false then
       begin
-        dwContinueStatus:=DBG_CONTINUE;
-        TDebuggerthread(debuggerthread).InitialBreakpointTriggered:=true;
 
-        result:=false;
-        exit;
+        {$ifdef windows}
+        if (CurrentDebuggerInterface is TVEHDebugInterface) then
+        begin
+          if (context^.{$ifdef cpu64}Rip{$else}Eip{$endif}=$ffffffce) then
+          begin
+            dwContinueStatus:=DBG_CONTINUE;
+            TDebuggerthread(debuggerthread).InitialBreakpointTriggered:=true;
+
+            result:=false;
+            onAttachEvent.SetEvent;
+            exit;
+          end;
+        end
+        else
+        {$endif}
+        begin
+          dwContinueStatus:=DBG_CONTINUE;
+          TDebuggerthread(debuggerthread).InitialBreakpointTriggered:=true;
+
+          result:=false;
+          onAttachEvent.SetEvent;
+          exit;
+        end;
+
       end;
 
 
     end
+    {$ifdef windows}
     else dwContinueStatus:=DBG_EXCEPTION_NOT_HANDLED; //not an expected breakpoint
+    {$endif}
   end;
 
-
-  if dwContinueStatus=DBG_EXCEPTION_NOT_HANDLED then
-  asm
-    nop
-  end;
 
   Result := True;
 end;
@@ -1201,8 +1430,12 @@ begin
     setContext;
 
 
-
+    {$ifdef darwin}
+    task_suspend(processhandle);
+    {$endif}
+    {$ifdef windows}
     NtSuspendProcess(processhandle);
+    {$endif}
 
     ResumeThread(self.Handle);
 
@@ -1225,6 +1458,7 @@ var
   bp: PBreakpoint;
 begin
   TDebuggerthread(debuggerthread).execlocation:=16;
+  unhandledException:=false;
   bp:=nil;
 
   OutputDebugString(inttohex(ThreadId,1)+'('+inttohex(context^.{$ifdef cpu64}Rip{$else}Eip{$endif},8)+')'+':HandleExceptionDebugEvent:'+inttohex(debugEvent.Exception.ExceptionRecord.ExceptionCode,8));
@@ -1286,7 +1520,12 @@ begin
 
     EXCEPTION_SINGLE_STEP, STATUS_WX86_SINGLE_STEP:
     begin
-      OutputDebugString('EXCEPTION_SINGLE_STEP. Dr6='+inttohex(context^.dr6,8));
+      OutputDebugString('EXCEPTION_SINGLE_STEP. Dr6='+inttohex(context^.dr6,8)+' Dr7='+inttohex(context^.dr7,8)+' RIP='+inttohex(context^.{$ifdef cpu32}eip{$else}rip{$endif},8));
+
+      if context^.dr6=0 then
+      asm
+      nop
+      end;
 
       if temporaryDisabledExceptionBreakpoints<>nil then
       begin
@@ -1295,10 +1534,12 @@ begin
         context^.EFlags:=eflags_setTF(context^.EFlags,0); //not needed in windows, but let's clear it anyhow
         setContext;
 
-        result:=DispatchBreakpoint(breakAddress, -1, dwContinueStatus);
+        if isSingleStepping then
+          result:=SingleStep(dwContinueStatus)
+        else
+          result:=DispatchBreakpoint(breakAddress, -1, dwContinueStatus);
 
         //reprotect the memory
-
 
         for i:=0 to temporaryDisabledExceptionBreakpoints.Count-1 do
         begin
@@ -1310,12 +1551,17 @@ begin
           dec(bp^.referencecount); //decrease referencecount so they can be deleted
         end;
 
-
-
-
+        context^.EFlags:=eflags_setRF(context^.EFlags,0);
+        setContext;
 
         SuspendThread(handle);
+
+        {$ifdef darwin}
+        task_resume(processhandle);
+        {$endif}
+        {$ifdef windows}
         NtResumeProcess(processhandle);
+        {$endif}
         dwContinueStatus:=DBG_CONTINUE;
         freeandnil(temporaryDisabledExceptionBreakpoints);
         exit;
@@ -1388,10 +1634,20 @@ begin
 
 
   if dwContinueStatus=DBG_EXCEPTION_NOT_HANDLED then
-  asm
-    nop
-  end;
+  begin
+    if (UnexpectedExceptionAction = ueaBreak) or ((UnexpectedExceptionAction = ueaBreakIfInRegion) and (IsInUnexpectedExceptionRegion(context^.{$ifdef cpu64}Rip{$else}Eip{$endif}))) then
+    begin
+      if IsIgnoredExceptionCode(debugEvent.Exception.ExceptionRecord.ExceptionCode)=false then
+      begin
+        unhandledException:=true;
 
+        unhandledExceptionCode:=debugEvent.Exception.ExceptionRecord.ExceptionCode;
+        handleBreak(nil, dwContinueStatus);
+        unhandledException:=false;
+      end;
+    end;
+
+  end;
 
   result:=true;
 end;
@@ -1404,10 +1660,18 @@ begin
   processid := debugevent.dwProcessId;
   threadid  := debugevent.dwThreadId;
 
-  if currentdebuggerinterface is TNetworkDebuggerInterface then
-    handle  := debugevent.CreateThread.hThread
-  else
-    handle  := OpenThread(THREAD_ALL_ACCESS, false, threadid );
+  if handle=0 then
+  begin
+    if currentdebuggerinterface is TNetworkDebuggerInterface then
+      handle  := debugevent.CreateThread.hThread
+    else
+    begin
+      if debugevent.CreateThread.hThread<>0 then
+        closehandle(handle);
+
+      handle  := OpenThread(THREAD_ALL_ACCESS, false, threadid );
+    end;
+  end;
 
   Result    := true;
 
@@ -1444,12 +1708,14 @@ begin
     end;
 
 
+    {$ifdef windows}
     if (CurrentDebuggerInterface is TKernelDebugInterface) or
        (CurrentDebuggerInterface is TNetworkDebuggerInterface) then //the kerneldebuginterface and networkdebuginterface do not give a breakpoint as init so use create as attachevent
       onAttachEvent.SetEvent;
 
     if (CurrentDebuggerInterface is TWindowsDebuggerInterface) and (debugEvent.CreateProcessInfo.hFile<>0) then
       closeHandle(debugEvent.CreateProcessInfo.hFile); //we don't need this
+    {$endif}
 
 
     secondcreateprocessdebugevent:=true;
@@ -1515,7 +1781,7 @@ begin
       if LUA_functioncall('debugger_onModuleLoad',[m, ptruint(debugevent.LoadDll.lpBaseOfDll)])=1 then
       begin
         //do a break
-        HandleBreak(nil);
+        HandleBreak(nil, dwContinueStatus);
 
       end;
 
@@ -1602,6 +1868,10 @@ end;
 destructor TDebugThreadHandler.destroy;
 begin
   freememandnil(realcontextpointer);
+
+  if handle<>0 then
+    closehandle(handle);
+
   inherited destroy;
 end;
 
@@ -1630,6 +1900,7 @@ begin
   zeromemory(realcontextpointer,sizeof(TCONTEXT)+4096);
 
 
+  {$ifdef windows}
   k:=GetModuleHandle('kernel32.dll');
   InitializeContext:=getprocaddress(k, 'InitializeContext');
   if assigned(initializeContext) then
@@ -1652,6 +1923,7 @@ begin
       end;
     end;
   end;
+  {$endif}
 
   if context=nil then
   begin
@@ -1676,6 +1948,8 @@ var
   newthread: boolean;
   i: integer;
   ActiveBPList: TList;
+
+  //hasDebugEvent: boolean;
 begin
   //OutputDebugString('HandleDebugEvent:'+inttostr(debugEvent.dwDebugEventCode));
   //find the TDebugThreadHandler class that belongs to this thread
@@ -1694,6 +1968,30 @@ begin
     end;
   end;
 
+  if debugEvent.dwDebugEventCode=EXIT_THREAD_DEBUG_EVENT then
+  begin
+    //don't touch anything
+
+    if currentThread<>nil then
+    begin
+      Result := currentThread.ExitThreadDebugEvent(debugEvent, dwContinueStatus);
+      ThreadList.Remove(currentThread);
+      currentThread.Free;
+      currentthread:=nil;
+
+
+
+
+    end;
+
+    debuggercs.leave;
+
+    if frmthreadlist<>nil then
+      TDebuggerthread(debuggerthread).Synchronize(TDebuggerthread(debuggerthread), updatethreadlist);
+
+    exit(true);
+  end;
+
 
   if currentThread = nil then //not found
   begin
@@ -1702,16 +2000,20 @@ begin
     currentThread := TDebugThreadHandler.Create(debuggerthread, fonattachEvent, fOnContinueEvent, breakpointlist, threadlist, debuggerCS);
     currentThread.processid := debugevent.dwProcessId;
     currentThread.threadid := debugevent.dwThreadId;
+    currentThread.CreateThreadDebugEvent(debugevent,dwContinueStatus);
 
     ThreadList.Add(currentThread);
   end
   else
     newthread:=false;
 
-  currentthread.isHandled:=true;
+  currentthread.isHandled:=CurrentDebuggerInterface.IsInjectedEvent=false;
+
   currentthread.FillContext;
   TDebuggerthread(debuggerthread).currentThread:=currentThread;
 
+  //hasDebugEvent:=not ((currentthread.context^.Dr6=0) or (word(urrentthread.context^.Dr6)=$0ff0));
+  outputdebugstring(format('DE - %x: %.8x',  [currentThread.ThreadId, currentThread.context^.dr6]));
   debuggercs.leave;
 
   //The most important data has been gathered (DR6 of the thread). it's safe from this point to occasionally release the lock
@@ -1735,22 +2037,7 @@ begin
     EXCEPTION_DEBUG_EVENT:      Result := currentThread.HandleExceptionDebugEvent(debugevent, dwContinueStatus);
     CREATE_THREAD_DEBUG_EVENT:  Result := currentThread.CreateThreadDebugEvent(debugEvent, dwContinueStatus);
     CREATE_PROCESS_DEBUG_EVENT: Result := currentThread.CreateProcessDebugEvent(debugEvent, dwContinueStatus);
-    EXIT_THREAD_DEBUG_EVENT:
-    begin
-      debuggercs.enter;
-      try
-        Result := currentThread.ExitThreadDebugEvent(debugEvent, dwContinueStatus);
-        ThreadList.Remove(currentThread);
-        currentThread.Free;
-        currentthread:=nil;
-
-      finally
-        debuggercs.leave;
-      end;
-
-      if frmthreadlist<>nil then
-        TDebuggerthread(debuggerthread).Synchronize(TDebuggerthread(debuggerthread), updatethreadlist);
-    end;
+    //EXIT_THREAD_DEBUG_EVENT: ;//don't handle here
     EXIT_PROCESS_DEBUG_EVENT:   Result := currentThread.ExitProcessDebugEvent(debugEvent, dwContinueStatus);
     LOAD_DLL_DEBUG_EVENT:       Result := currentThread.LoadDLLDebugEvent(debugEvent, dwContinueStatus);
     UNLOAD_DLL_DEBUG_EVENT:     Result := currentThread.UnloadDLLDebugEvent(debugEvent, dwContinueStatus);
@@ -1805,7 +2092,7 @@ begin
         currentthread.context^.dr3:=0;
         currentthread.context^.dr7:=$400;
 
-        currentThread.setContext;
+        currentThread.setContext(cfDebug);
       end
       else
       begin
@@ -1813,7 +2100,7 @@ begin
         for i:=0 to ActiveBPList.count-1 do
           TDebuggerthread(debuggerthread).UnsetBreakpoint(breakpointlist[i], currentthread.context);
 
-        currentthread.setContext;
+        currentthread.setContext(cfDebug);
       end;
 
       for i:=0 to ActiveBPList.count-1 do
@@ -1835,8 +2122,6 @@ begin
 
 
   OutputDebugString('Returned from HandleDebugEvent');
-
-
 
 end;
 
@@ -1860,7 +2145,7 @@ begin
     case currentdebugevent.dwDebugEventCode of
       CREATE_PROCESS_DEBUG_EVENT: eventtext:='CREATE_PROCESS_DEBUG_EVENT';
       CREATE_THREAD_DEBUG_EVENT: eventtext:='CREATE_THREAD_DEBUG_EVENT';
-      EXCEPTION_DEBUG_EVENT: eventtext:='EXCEPTION_DEBUG_EVENT';
+      EXCEPTION_DEBUG_EVENT: eventtext:='EXCEPTION_DEBUG_EVENT('+inttostr(currentdebugevent.Exception.dwFirstChance)+')';
       EXIT_PROCESS_DEBUG_EVENT: eventtext:='EXIT_PROCESS_DEBUG_EVENT';
       EXIT_THREAD_DEBUG_EVENT: eventtext:='EXIT_THREAD_DEBUG_EVENT';
       LOAD_DLL_DEBUG_EVENT: eventtext:='LOAD_DLL_DEBUG_EVENT';

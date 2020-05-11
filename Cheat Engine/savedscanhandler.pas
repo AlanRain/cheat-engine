@@ -66,12 +66,18 @@ end;   }
 
 interface
 
+{$ifdef darwin}
+uses macport, LCLIntf,classes,sysutils,syncobjs, CEFuncProc, CustomTypeHandler, commonTypeDefs;
+{$endif}
+
 {$ifdef windows}
 uses windows, LCLIntf,classes,sysutils,syncobjs, CEFuncProc, CustomTypeHandler, commonTypeDefs;
 
 {$define customtypeimplemented}
 
-{$else}
+{$endif}
+
+{$ifdef jni}
 uses Classes,sysutils,syncobjs,unixporthelper, CustomTypeHandler, commonTypeDefs;
 
 {$endif}
@@ -660,7 +666,7 @@ begin
       p:=0;
       for i:=0 to maxnumberofregions-1 do
       begin
-        maxregionsize:=max(maxregionsize, pm[i].memorysize);
+        maxregionsize:=max(maxregionsize, integer(pm[i].memorysize));
         pm[i].startaddress:=pointer(p); //set the offset in the file (if it wasn't set already)
         inc(p, pm[i].MemorySize);
       end;

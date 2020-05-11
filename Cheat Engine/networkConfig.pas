@@ -5,7 +5,13 @@ unit networkConfig;
 interface
 
 uses
-  jwawindows, windows, Classes, SysUtils, FileUtil, Forms, Controls, Graphics,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  jwawindows, windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, Forms, Controls, Graphics,
   Dialogs, StdCtrls, ExtCtrls, ComCtrls, Menus, resolve, Sockets, ctypes,
   registry;
 
@@ -21,6 +27,7 @@ type
     edtHost: TEdit;
     edtPort: TEdit;
     GroupBox1: TGroupBox;
+    ctsImageList: TImageList;
     Label1: TLabel;
     Label2: TLabel;
     ListView1: TListView;

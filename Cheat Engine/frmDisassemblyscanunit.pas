@@ -5,15 +5,23 @@ unit frmDisassemblyscanunit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs,disassembler,{$ifndef net}NewKernelHandler,{$endif}CEFuncProc, ExtCtrls, StdCtrls,
   ComCtrls, LResources, LCLProc, Menus, strutils, OldRegExpr, RegExpr, Clipbrd;
 
 type
+  TAssemblyScanResultFoundEvent=procedure(address: ptruint; s:string) of object;
   TfrmDisassemblyscan = class;
 
   TDisassemblerthread=class(tthread)
   private
+    foundaddress: ptruint;
     foundline: string;
     disassembler: TDisassembler; //this thread specific disassembler
     function checkAddress(x: ptruint): ptruint;
@@ -33,19 +41,17 @@ type
 
   TfrmDisassemblyscan = class(TForm)
     btnCancel: TButton;
+    asImageList: TImageList;
     ListBox1: TListBox;
     Label1: TLabel;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
     Panel1: TPanel;
     PopupMenu1: TPopupMenu;
+    ProgressBar1: TProgressBar;
     Timer1: TTimer;
-    procedure ListBox1KeyDown(Sender: TObject; var Key: Word; Shift: TShiftState
-      );
-    procedure ListBox1KeyPress(Sender: TObject; var Key: char);
     procedure MenuItem1Click(Sender: TObject);
     procedure MenuItem2Click(Sender: TObject);
-    procedure Panel1Click(Sender: TObject);
     procedure Panel1Resize(Sender: TObject);
     procedure Timer1Timer(Sender: TObject);
     procedure FormShow(Sender: TObject);
@@ -57,12 +63,17 @@ type
     { Private declarations }
     Disassemblerthread: TDisassemblerthread;
     fStringsToFind: Tstrings; //actually a tstringlist
+    fOnResultFound: TAssemblyScanResultFoundEvent;
+    fOnScanDone: TNotifyEvent;
     procedure setStringsToFind(s: tstrings);
+    procedure ResultFound(address: ptruint; s: string);
   public
     { Public declarations }
     startaddress: ptrUint;
     stopaddress: ptruint;
     property stringstofind: tstrings read fStringsToFind write setStringsToFind;
+    property OnResultFound: TAssemblyScanResultFoundEvent read fOnResultFound write fOnResultFound;
+    property OnScanDone: TNotifyEvent read fOnScanDone write fOnScanDone;
   end;
 
 
@@ -72,12 +83,13 @@ implementation
 uses MemoryBrowserFormUnit, ProcessHandlerUnit;
 
 resourcestring
+  rsDone = 'Done';
   rsDSScanError = 'scan error';
   rsDSClose = 'Close';
 
 procedure TDisassemblerthread.foundone;
 begin
-  ownerform.ListBox1.Items.Add(foundline)
+  ownerform.ResultFound(foundaddress, foundline);
 end;
 
 constructor TDisassemblerthread.create(suspended: boolean);
@@ -85,6 +97,7 @@ begin
   inherited create(suspended);
 
   disassembler:=TDisassembler.Create;
+  disassembler.aggressivealignment:=true;
 end;
 
 destructor TDisassemblerthread.destroy;
@@ -109,20 +122,30 @@ var ok: boolean;
    d: string;
    y: string;
 
+   ignore: string;
+   opcode: string;
+
    i,j: integer;
    matchpos,offset: integer;
+   address: ptruint;
 begin
   result:=0;
+  address:=x;
   for i:=0 to length(regexpressions)-1 do
   begin
     //check if it confirms to the search querry
 
     //disassemble
     d:=uppercase(disassembler.disassemble(x,y));
+
+    //make sure to isolate the opcodes for the scan
+    splitDisassembledString(d,false,ignore,ignore,opcode,ignore);
+
+
     if i=0 then
     begin
       foundline:=d;
-      result:=x; //if it's the firt line return this address
+      result:=x; //if it's the first line return this address
     end;
 
 
@@ -130,7 +153,8 @@ begin
     matchpos:=0;
     offset:=1;
 
-    ok:=regexpressions[i].Exec(d);
+    //ok:=regexpressions[i].Exec(d); //address + bytes + opcodes + special
+    ok:=regexpressions[i].Exec(opcode); //opcodes only
 
     if (not ok) or (regexpressions[i].MatchPos[0]=0) then exit;
 
@@ -138,6 +162,7 @@ begin
   end;
 
   //still here so a match
+  foundaddress:=address;
   synchronize(foundone);
 end;
 
@@ -156,7 +181,7 @@ begin
     currentaddress:=x;
     maxaddress:=currentaddress;
 
-    while not terminated and (maxaddress<=x) and (currentaddress<stopaddress) do
+    while (not terminated) and (maxaddress<=x) and (currentaddress<stopaddress) do
     begin
       maxaddress:=currentaddress;
 
@@ -173,8 +198,6 @@ begin
 
       x:=checkAddress(x);
 
-
-
     end;
   except
     on e:exception do
@@ -185,18 +208,22 @@ end;
 procedure TfrmDisassemblyscan.Timer1Timer(Sender: TObject);
 begin
   if disassemblerthread<>nil then
-    label1.caption:=inttohex(disassemblerthread.currentaddress,8);
+  begin
+    if disassemblerthread.Finished=false then
+    begin
+      label1.caption:=inttohex(disassemblerthread.currentaddress,8);
 
-end;
-
-procedure TfrmDisassemblyscan.Panel1Click(Sender: TObject);
-begin
-
-end;
-
-procedure TfrmDisassemblyscan.ListBox1KeyPress(Sender: TObject; var Key: char);
-begin
-
+      if Disassemblerthread.stopaddress>disassemblerthread.startaddress then
+        progressbar1.Position:=trunc((disassemblerthread.currentaddress-disassemblerthread.startaddress)/(Disassemblerthread.stopaddress-disassemblerthread.startaddress)*100);
+    end
+    else
+    begin
+      label1.caption:=rsDone;
+      progressbar1.Position:=100;
+      if assigned(fOnScanDone) then
+        fOnScanDone(self);
+    end;
+  end;
 end;
 
 procedure TfrmDisassemblyscan.MenuItem1Click(Sender: TObject);
@@ -219,16 +246,16 @@ begin
   sl.free;
 end;
 
-procedure TfrmDisassemblyscan.ListBox1KeyDown(Sender: TObject; var Key: Word;
-  Shift: TShiftState);
-begin
-
-
-end;
-
 procedure TfrmDisassemblyscan.Panel1Resize(Sender: TObject);
 begin
   btnCancel.top:=panel1.height-btnCancel.clientheight-2;
+end;
+
+procedure TfrmDisassemblyscan.ResultFound(address: ptruint; s: string);
+begin
+  ListBox1.Items.Add(s);
+  if assigned(fOnResultFound) then
+    fOnResultFound(address, s);
 end;
 
 procedure TfrmDisassemblyscan.FormShow(Sender: TObject);
@@ -247,9 +274,12 @@ begin
       stringstofind.Delete(i)
     else
     begin
-      stringstofind[i]:=StringReplace(EscapeStringForRegEx(stringstofind[i]), '\*','.*',[rfReplaceAll]);
-
-
+      s:=EscapeStringForRegEx(stringstofind[i]);
+      s:=StringReplace(s, '\*','.*',[rfReplaceAll]); //zero or more chars
+      s:=StringReplace(s, '\^','^',[rfReplaceAll]);  //start of line
+      s:=StringReplace(s, '\$','$',[rfReplaceAll]);  //end of line
+      s:=StringReplace(s, '\?','.',[rfReplaceAll]);  //exactly one char
+      stringstofind[i]:=s;
       inc(i);
     end;
   end;

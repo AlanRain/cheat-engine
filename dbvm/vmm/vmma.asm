@@ -11,6 +11,7 @@ extern cinthandler
 extern menu
 extern memorylist
 extern clearScreen
+extern getAPICID
 
 GLOBAL amain
 GLOBAL vmmstart
@@ -73,6 +74,8 @@ exportlist:         dq 0
 
 initcs: dd 0 ;critical section to block entering cpus.  Each CPU sets up the stack for the next CPU (so there will always be one too many)
 vmmentrycount: dd 0  ;The number of times 0x00400000 has been executed (in short, the number of CPU's launched)
+
+;lasttsc: dq 0
 
 afterinitvariables:
 
@@ -177,6 +180,16 @@ vmcalltest_asm:
   add rsp,8+12
   ret
 
+global _vmcall
+_vmcall:
+  sub rsp,8
+  mov rax,rsi  ;data
+  mov rdx,rdi  ;password1
+  call [vmcall_instr]
+  add rsp,8
+  ret
+
+
 
 
 global vmcall_setintredirects
@@ -242,7 +255,7 @@ struc vmxloop_amd_stackframe
   saved_rcx:      resq 1
   saved_rbx:      resq 1
   saved_rax:      resq 1
-                  resq 1  ;alignment
+  saved_fsbase:   resq 1
   fxsavespace:    resb 512 ;fxsavespace must be aligned
   psavedstate:    resq 1 ;saved param3
   vmcb_PA:        resq 1 ;saved param2
@@ -315,12 +328,13 @@ vmrun_loop:
 ;xchg bx,bx
 mov rax,[rsp+vmcb_PA]  ;for those wondering, RAX is stored in the vmcb->RAX field, not here
 vmload
+clgi
+cli
 vmrun ;rax
+cli
+clgi
 vmsave
 
-
-;on return RAX and RSP are unchanged, but ALL other registers are changed and MUST be saved first
-;xchg bx,bx
 
 db 0x48
 fxsave [rsp+fxsavespace]
@@ -340,6 +354,19 @@ mov [rsp+saved_rcx],rcx
 mov [rsp+saved_rbx],rbx
 mov [rsp+saved_rax],rax
 
+;save guest fs-base
+mov ecx,0c0000100h
+rdmsr
+shl rdx,32
+add rax,rdx
+mov [rsp+saved_fsbase],rax
+
+;restore host fs-base
+mov ecx,0c0000100h
+mov eax,[rsp+currentcpuinfo]
+mov edx,[rsp+currentcpuinfo+4]
+wrmsr
+
 mov rdi,[rsp+currentcpuinfo]
 lea rsi,[rsp+saved_r15] ;vmregisters
 lea rdx,[rsp+fxsavespace] ;fxsave
@@ -350,7 +377,12 @@ call vmexit_amd
 cmp eax,1
 je vmrun_exit
 
-;restore
+;restore guest
+mov ecx,0c0000100h ;fs-base
+mov eax,[rsp+saved_fsbase]
+mov edx,[rsp+saved_fsbase+4]
+wrmsr
+
 db 0x48
 fxrstor [rsp+fxsavespace]
 mov r15,[rsp+saved_r15]
@@ -503,19 +535,24 @@ ret
 
 align 16
 vmxloop_vmexit:
-cli
+;cli
 ;ok, this should be executed
 
-cmp dword [fs:0x14],0
-je isbootcpu
+;cmp dword [fs:0x14],0
+;je isbootcpu
 
 
 
-isbootcpu:
+;isbootcpu:
 
 ;save registers
 
+
 sub rsp,15*8
+
+mov [rsp+14*8],rax
+mov [rsp+11*8],rdx
+
 
 mov [rsp],r15
 mov [rsp+1*8],r14
@@ -528,10 +565,9 @@ mov [rsp+7*8],r8
 mov [rsp+8*8],rbp
 mov [rsp+9*8],rsi
 mov [rsp+10*8],rdi
-mov [rsp+11*8],rdx
 mov [rsp+12*8],rcx
 mov [rsp+13*8],rbx
-mov [rsp+14*8],rax
+
 
 ;set host into a 'valid' state
 mov rbp,rsp
@@ -595,7 +631,6 @@ jae vmxloop_exitvm
 
 ;returned 0, so
 
-
 ;restore vmx registers (esp-36)
 pop r15
 pop r14
@@ -619,10 +654,6 @@ vmresume
 ;never executed unless on error
 ;restore state of vmm
 
-
-%ifdef JTAG
-db 0xf1 ;jtag breakpoint
-%endif
 
 pop r15
 pop r14
@@ -663,9 +694,6 @@ pop rax
 
 vmlaunch
 
-%ifdef JTAG
-db 0xf1 ;jtag breakpoint
-%endif
 
 ;never executed unless on error
 ;restore state of vmm
@@ -691,9 +719,7 @@ pop rbx
 pop rax
 
 vmresume
-%ifdef JTAG
-db 0xf1 ;jtag breakpoint
-%endif
+
 
 ;never executed unless on error
 mov dword [fs:0x10],0xce00 ;exitreason 0xce00
@@ -1372,6 +1398,17 @@ db 0xcc
 db 0xcc
 db 0xcc
 
+global setDR1
+;--------------------;
+;setDR1(ULONG newdr1);
+;--------------------;
+setDR1:
+mov dr1,rdi
+ret
+db 0xcc
+db 0xcc
+db 0xcc
+
 global getDR2
 ;------------------;
 ;ULONG getDR2(void);
@@ -1383,12 +1420,34 @@ db 0xcc
 db 0xcc
 db 0xcc
 
+global setDR2
+;--------------------;
+;setDR2(ULONG newdr2);
+;--------------------;
+setDR2:
+mov dr2,rdi
+ret
+db 0xcc
+db 0xcc
+db 0xcc
+
 global getDR3
 ;------------------;
 ;ULONG getDR3(void);
 ;------------------;
 getDR3:
 mov rax,dr3
+ret
+db 0xcc
+db 0xcc
+db 0xcc
+
+global setDR3
+;--------------------;
+;setDR3(ULONG newdr3);
+;--------------------;
+setDR3:
+mov dr3,rdi
 ret
 db 0xcc
 db 0xcc
@@ -1442,8 +1501,68 @@ global _invpcid
 ;--------------------------;
 ;_invlpg(int type, 128data);
 ;--------------------------;
+_invpcid:
 db 0x66,0x0f,0x38,0x82,0x3e ;invpcid rdi,[rsi]
 ret
+
+global _invept
+;--------------------------;
+;_invept(int type, 128data);  type must be either 1(local for specific ept pointer) or 2(global for all vpids)
+;--------------------------;
+_invept:
+invept rdi,[rsi]
+ret
+
+
+global _invept2
+;---------------------------;
+;_invept2(int type, 128data);  type must be either 1(local for specific ept pointer) or 2(global for all vpids)
+;---------------------------;
+_invept2:
+invept rdi,[rsi]
+jc _invept2_err1
+jz _invept2_err2
+xor rax,rax
+ret
+
+_invept2_err1:
+mov eax,1
+ret
+
+_invept2_err2:
+mov eax,2
+ret
+
+
+
+global _invvpid
+;--------------------------;
+;_invvpid(int type, 128data);  type must be either 0(specific linear address for specific vpid) 1(local for specific vpid) or 2(global for all vpids)
+;--------------------------;
+_invvpid:
+invvpid rdi,[rsi]
+ret
+
+global _invvpid2
+;----------------------------;
+;_invvpid2(int type, 128data);  type must be either 0(specific linear address for specific vpid) 1(local for specific vpid) or 2(global for all vpids)
+;----------------------------;
+_invvpid2:
+invvpid rdi,[rsi]
+jc _vmread2_err1
+jz _vmread2_err2
+xor rax,rax
+ret
+
+_invvpid2_err1:
+mov eax,1
+ret
+
+_invvpid2_err2:
+mov eax,2
+ret
+
+
 
 
 global _invlpg
@@ -2242,8 +2361,9 @@ infloop:
 nop
 nop
 xchg bx,bx
+cpuid
 nop
-hlt
+;hlt
 nop
 nop
 xchg bx,bx ;should never happen
@@ -2354,6 +2474,9 @@ and eax,0x7FFFFFFF
 mov cr0,eax
 
 xor eax,eax
+cpuid
+xor eax,eax
+
 mov cr3,eax
 
 ;unset IA32_EFER_LME to 0 (disable 64 bits)
@@ -2671,6 +2794,17 @@ mov si,(str_givingup-movetoreal)
 call printstring
 
 notok_loop:
+sti
+mov ax,0xb800
+mov ds,ax
+mov byte [0],'X'
+mov byte [1],025h
+mov byte [2],'X'
+mov byte [3],025h
+mov byte [4],'X'
+mov byte [5],025h
+mov byte [6],'X'
+mov byte [7],025h
 nop
 nop
 cpuid
@@ -2738,6 +2872,8 @@ mov byte [7],6;
 
 ;jmp readok
 
+
+
 xor ax,ax
 mov ds,ax
 
@@ -2784,7 +2920,9 @@ pop ax
 beforeboot:
 nop
 nop
+cpuid
 nop
+
 
 
 ;jmp beforeboot

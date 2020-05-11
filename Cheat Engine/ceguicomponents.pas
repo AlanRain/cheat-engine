@@ -24,8 +24,8 @@ type
 {$endif}
   end;
 
-type TCESplitter=class(TCustomSplitter)
-  property Align;
+type TCESplitter=class(TSplitter);
+{  property Align;
   property Anchors;
   property AutoSnap;
   property Beveled;
@@ -45,15 +45,15 @@ type TCESplitter=class(TCustomSplitter)
   property ShowHint;
   property Visible;
   property Width;
-end;
+end;  }
 
 type TCETimer=class(Ttimer);
 
 type TCESaveDialog=class(TSaveDialog);
 type TCEOpenDialog=class(TOpendialog);
 
-type TCEListView=class(TCustomListView)
-published
+type TCEListView=class(TListView);
+{published
   property Align;
   property AllocBy;
   property Anchors;
@@ -106,7 +106,7 @@ published
   property OnClick;
   property OnColumnClick;
   property OnCompare;
-//  property OnContextPopup;
+  property OnContextPopup;
   property OnCustomDraw;
   property OnCustomDrawItem;
   property OnCustomDrawSubItem;
@@ -133,10 +133,10 @@ published
  // property OnStartDock;
  // property OnStartDrag;
  // property OnUTF8KeyPress;
-end;
+end;  }
 
-type TCEProgressBar=class(TCustomProgressBar)
-published
+type TCEProgressBar=class(TProgressBar);
+{published
   property Align;
   property Anchors;
   property BorderSpacing;
@@ -150,7 +150,7 @@ published
   property Max;
   property Min;
   property Position;
- // property OnContextPopup;
+  property OnContextPopup;
 //  property OnDragDrop;
 //  property OnDragOver;
 //  property OnEndDrag;
@@ -175,10 +175,10 @@ published
   property TabStop;
   property Visible;
   property BarShowText;
-end;
+end;     }
 
-type TCETrackBar=class(TCustomTrackBar)
-  published
+type TCETrackBar=class(TTrackBar);
+{  published
     property Align;
     property Anchors;
     property BorderSpacing;
@@ -194,7 +194,7 @@ type TCETrackBar=class(TCustomTrackBar)
     property OnChange;
     property OnChangeBounds;
     property OnClick;
- //   property OnContextPopup;
+    property OnContextPopup;
 //    property OnDragDrop;
 //    property OnDragOver;
 //    property OnEndDrag;
@@ -230,10 +230,10 @@ type TCETrackBar=class(TCustomTrackBar)
     property TickMarks;
     property TickStyle;
     property Visible;
-  end;
+  end;    }
 
-type TCEListBox=class(TCustomListBox)
-  published
+type TCEListBox=class(TListBox);
+{  published
     property Align;
     property Anchors;
     property BidiMode;
@@ -255,11 +255,11 @@ type TCEListBox=class(TCustomListBox)
     property MultiSelect;
     property OnChangeBounds;
     property OnClick;
-    //property OnContextPopup;
+    property OnContextPopup;
     property OnDblClick;
   //  property OnDragDrop;
   //  property OnDragOver;
- //   property OnDrawItem;
+    property OnDrawItem;
     property OnEnter;
   //  property OnEndDrag;
     property OnExit;
@@ -292,10 +292,10 @@ type TCEListBox=class(TCustomListBox)
     property TabStop;
     property TopIndex;
     property Visible;
-  end;
+  end; }
 
-type TCEComboBox=class(TcustomComboBox)
-published
+type TCEComboBox=class(TComboBox);
+{published
   property Align;
   property Anchors;
   property ArrowKeysTraverseList;
@@ -324,11 +324,11 @@ published
   property OnChangeBounds;
   property OnClick;
   property OnCloseUp;
- // property OnContextPopup;
+  property OnContextPopup;
   property OnDblClick;
 ////  property OnDragDrop;
  // property OnDragOver;
- // property OnDrawItem;
+  property OnDrawItem;
 //  property OnEndDrag;
   property OnDropDown;
   property OnEditingDone;
@@ -360,11 +360,11 @@ published
   property TabStop;
   property Text;
   property Visible;
-end;
+end; }
 
 
-type TCEGroupBox=class(TCustomGroupBox)
-published
+type TCEGroupBox=class(TGroupBox);
+{published
   property Align;
   property Anchors;
   property AutoSize;
@@ -393,7 +393,7 @@ published
   property Visible;
   property OnChangeBounds;
   property OnClick;
- // property OnContextPopup;
+  property OnContextPopup;
   property OnDblClick;
 //  property OnDragDrop;
 //  property OnDockDrop;
@@ -417,10 +417,10 @@ published
 //  property OnStartDrag;
 //  property OnUnDock;
 //  property OnUTF8KeyPress;
-end;
+end;  }
 
-type TCERadioGroup=class(TCustomRadioGroup)
-published
+type TCERadioGroup=class(TRadioGroup);
+{published
     property Align;
     property Anchors;
     property AutoFill;
@@ -467,15 +467,15 @@ published
     property ParentFont;
     property ParentColor;
     property ParentShowHint;
-   property PopupMenu;
+    property PopupMenu;
     property ShowHint;
     property TabOrder;
     property TabStop;
     property Visible;
-end;
+end;    }
 
-type TCECheckBox=class(TCustomCheckBox)
-  public
+type TCECheckBox=class(TCheckBox);
+{  public
     constructor Create(TheOwner: TComponent); override;
   published
     //property Action;
@@ -498,7 +498,7 @@ type TCECheckBox=class(TCustomCheckBox)
     property OnChange;
     property OnChangeBounds;
     property OnClick;
-    //property OnContextPopup;
+    property OnContextPopup;
    // property OnDragDrop;
    // property OnDragOver;
    // property OnEditingDone;
@@ -526,18 +526,21 @@ type TCECheckBox=class(TCustomCheckBox)
     property TabOrder;
     property TabStop default True;
     property Visible;
-  end;
+  end;  }
 
 
 type TCEToggleBox=class(TToggleBox); //there is no custom...
 
 
-type TCEEdit=class(TCustomEdit)
+type TCEEdit=class(TEdit)
+  private
+    fTextHintFontColor: TColor;
+    fTextHintFontStyle: TFontStyle;
   public
     property AutoSelected;
   published
   //  property Action;
-    property Align;
+  {  property Align;
     property Alignment;
     property Anchors;
     property AutoSize;
@@ -560,7 +563,7 @@ type TCEEdit=class(TCustomEdit)
     property OnChange;
     property OnChangeBounds;
     property OnClick;
- //   property OnContextPopup;
+    property OnContextPopup;
     property OnDblClick;
  //   property OnDragDrop;
  //   property OnDragOver;
@@ -589,15 +592,15 @@ type TCEEdit=class(TCustomEdit)
     property TabStop;
     property TabOrder;
     property Text;
-    property Visible;
+    property Visible; }
 
     property SelStart;
     property SelLength;
     property SelText;
 
     property TextHint;
-    property TextHintFontColor;
-    property TextHintFontStyle;
+    property TextHintFontColor: Tcolor read fTextHintFontColor write fTextHintFontColor;
+    property TextHintFontStyle: TFontStyle read fTextHintFontStyle write fTextHintFontStyle;
   end;
 
 type TCEForm=class(TCustomForm)
@@ -606,13 +609,15 @@ type TCEForm=class(TCustomForm)
     fVisible: boolean;
     saveddesign: TMemorystream;
     fDoNotSaveInTable: boolean;
-    procedure paint; override;
+
     procedure OnWriteMethod(Writer: TWriter; Instance: TPersistent; PropInfo: PPropInfo; const MethodValue, DefMethodValue: TMethod; var Handled: boolean);
     procedure WriteComponentAsBinaryToStreamWithMethods(Astream: TStream);
     procedure setActive(state: boolean);
     function getActive: boolean;
 
     procedure SetMethodProperty(Reader: TReader; Instance: TPersistent; PropInfo: PPropInfo; const TheMethodName: string; var Handled: boolean);
+  protected
+    procedure paint; override;
   public
     designsurface: TJvDesignSurface;
     procedure ResyncWithLua(Base: TComponent); overload;
@@ -621,7 +626,7 @@ type TCEForm=class(TCustomForm)
     procedure SaveToFileLFM(filename: string);
     procedure LoadFromFile(filename: string);
     procedure LoadFromFileLFM(filename: string);
-    procedure SaveToXML(Node: TDOMNode);
+    procedure SaveToXML(Node: TDOMNode; dontdeactivate:boolean=false);
     procedure LoadFromXML(Node: TDOMNode);
     procedure RestoreToDesignState;
     procedure SaveCurrentStateasDesign;
@@ -686,7 +691,7 @@ type TCEForm=class(TCustomForm)
     property OnMouseLeave;
     property OnMouseMove;
     property OnMouseUp;
-//    property OnMouseWheel;
+    property OnMouseWheel;
     property OnMouseWheelDown;
     property OnMouseWheelUp;
     property OnPaint;
@@ -716,9 +721,9 @@ type TCEForm=class(TCustomForm)
     property DoNotSaveInTable: boolean read fDoNotSaveInTable write fDoNotSaveInTable default False;
 end;
 
-type TCEMemo=class(TCustomMemo)
+type TCEMemo=class(TMemo)
   published
-    property Align;
+ {   property Align;
     property Alignment;
     property Anchors;
     property BidiMode;
@@ -738,7 +743,7 @@ type TCEMemo=class(TCustomMemo)
     property MaxLength;
     property OnChange;
     property OnClick;
-  //  property OnContextPopup;
+    property OnContextPopup;
     property OnDblClick;
    // property OnDragDrop;
   //  property OnDragOver;
@@ -772,15 +777,15 @@ type TCEMemo=class(TCustomMemo)
     property Visible;
     property WantReturns;
     property WantTabs;
-    property WordWrap;
+    property WordWrap; }
     property SelStart;
     property SelLength;
     property SelText;
   end;
 
 
-type TCEImage=class(TCustomImage)
-  published
+type TCEImage=class(TImage);
+{  published
     property Align;
     property Anchors;
     property AutoSize;
@@ -816,10 +821,10 @@ type TCEImage=class(TCustomImage)
     property Stretch;
     property Transparent;
     property Visible;
-  end;
+  end; }
 
-type TCEPanel=class(TCustomPanel)
-published
+type TCEPanel=class(TPanel);
+{published
     property Align;
     property Alignment;
     property Anchors;
@@ -855,7 +860,7 @@ published
     property UseDockManager default True;
     property Visible;
     property OnClick;
-   // property OnContextPopup;
+    property OnContextPopup;
     property OnDockDrop;
     property OnDockOver;
     property OnDblClick;
@@ -876,10 +881,10 @@ published
   //  property OnStartDock;
    // property OnStartDrag;
    // property OnUnDock;
-  end;
+  end; }
 
-type TCELabel=class(TCustomLabel)
-published
+type TCELabel=class(TLabel);
+{published
   property Align;
   property Alignment;
   property Anchors;
@@ -917,14 +922,14 @@ published
   property OnMouseEnter;
   property OnMouseLeave;
   property OnChangeBounds;
-  //property OnContextPopup;
+  property OnContextPopup;
   property OnResize;
   property OnStartDrag;
   property OptimalFill;
-end;
+end;   }
 
-type TCEButton=class(TCustomButton)
-  private
+type TCEButton=class(TButton);
+ { private
   published
    //
     property Align;
@@ -946,7 +951,7 @@ type TCEButton=class(TCustomButton)
     property ModalResult;
     property OnChangeBounds;
     property OnClick;
-    //property OnContextPopup;
+    property OnContextPopup;
     //property OnDragDrop;
     //property OnDragOver;
     //property OnEndDrag;
@@ -970,12 +975,12 @@ type TCEButton=class(TCustomButton)
     property TabOrder;
     property TabStop;
     property Visible;
-end;
+end;  }
 
 
 implementation
 
-uses luahandler,luacaller, formdesignerunit;
+uses luahandler,luacaller, formdesignerunit, CheckLst, colorbox;
 
 resourcestring
   rsInvalidFormData = 'Invalid formdata';
@@ -994,14 +999,14 @@ begin
   inherited destroy;
 end;
 {$endif}
-
+        {
 constructor TCECheckBox.Create(TheOwner: TComponent);
 begin
   inherited Create(TheOwner);
   fCompStyle := csCheckbox;
   TabStop := True;
   AutoSize := True;
-end;
+end;  }
 
 //ceform
 
@@ -1097,12 +1102,20 @@ var
   Writer: TWriter;
   DestroyDriver: Boolean;
   g: tguid;
+  s: string;
+  i: integer;
 begin
   if name='' then
   begin
     //an object NEEDS a name
     CreateGUID(g);
-    name:='NoName_'+GUIDToString(g);
+
+    s:=GUIDToString(g);
+    for i:=1 to length(s) do
+      if s[i] in ['{','}','-'] then
+        s[i]:='_';
+
+    name:='NoName_'+s;
   end;
 
   DestroyDriver:=false;
@@ -1144,6 +1157,8 @@ begin
   wasactive:=active;
   active:=false;
 
+  if designsurface<>nil then
+    freeandnil(designsurface);
 
   //RegisterPropertyToSkip(TCEForm, 'Visible', '','');
 
@@ -1171,7 +1186,6 @@ begin
   end;
 
   active:=wasactive;
-
   ResyncWithLua;
 end;
 
@@ -1193,12 +1207,9 @@ begin
   savedDesign.position:=0;
 
   ResyncWithLua;
- // ss:=tstringstream.create('');
- // LRSObjectBinaryToText(savedDesign, ss);
- // showmessage(ss.DataString);
 end;
 
-procedure TCEForm.SaveToXML(Node: TDOMNode);
+procedure TCEForm.SaveToXML(Node: TDOMNode; dontdeactivate: boolean=false);
 var doc: TXMLDocument;
   outputastext: pchar;
   g: TGuid;
@@ -1212,9 +1223,16 @@ var doc: TXMLDocument;
   a: TDOMAttr;
   formnode: TDOMNode;
 begin
-
   wasactive:=active;
-  if active then active:=false;
+
+  if dontdeactivate then
+  begin
+    SaveCurrentStateasDesign;
+  end
+  else
+  begin
+    if active then active:=false;
+  end;
 
   if saveddesign=nil then exit; //nothing to save
 
@@ -1264,7 +1282,8 @@ begin
       FreeMemAndNil(outputastext);
   end;
 
-  active:=wasactive;
+  //if dontdeactivate=false then
+  //  active:=wasactive;
 end;
 
 procedure TCEForm.LoadFromXML(Node: TDOMNode);
@@ -1354,7 +1373,7 @@ begin
   formnode:=xmldoc.appendchild(xmldoc.createElement('FormData'));
 
   SaveCurrentStateasDesign;
-  SaveToXML(formnode);
+  SaveToXML(formnode,true);
 
   WriteXML(xmldoc, filename);
 end;
@@ -1416,9 +1435,9 @@ begin
   if active then
   begin
     if color<>clDefault then
-      DesignPaintGrid(Canvas, ClientRect, ColorToRGB(color), InvertColor(ColorToRGB(color)))
+      DesignPaintGrid(Canvas, ClientRect, ColorToRGB(color), InvertColor(ColorToRGB(color)), scalex(8,96))
     else
-      DesignPaintGrid(Canvas, ClientRect);
+      DesignPaintGrid(Canvas, ClientRect, clBtnFace,clBlack, scalex(8,96));
   end;
 end;
 
@@ -1545,6 +1564,8 @@ initialization
   RegisterClass(TComboBox);
   RegisterClass(TListBox);
 
+
+
   RegisterClass(TCheckBox);
   RegisterClass(TGroupBox);
   RegisterClass(TRadioGroup);
@@ -1560,6 +1581,9 @@ initialization
   RegisterClass(TPageControl);
   RegisterClass(TTrayIcon);
   registerclass(TStatusBar);
+  registerclass(TCheckListBox);
+  registerclass(TColorDialog);
+  registerclass(TColorBox);
 
 
   RegisterPropertyEditor(ClassTypeInfo(TListItems), TCEListView, 'Items', TCEListViewItemsPropertyEditor);
@@ -1579,20 +1603,14 @@ initialization
   RegisterPropertyEditor(TypeInfo(TTVAdvancedCustomDrawItemEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVChangedEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVChangingEvent), nil, '', THiddenPropertyEditor);
-  RegisterPropertyEditor(TypeInfo(TTVExpandedEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVCompareEvent), nil, '', THiddenPropertyEditor);
-  RegisterPropertyEditor(TypeInfo(TContextPopupEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVCreateNodeClassEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVCustomCreateNodeEvent), nil, '', THiddenPropertyEditor);
-  RegisterPropertyEditor(TypeInfo(TTVCustomDrawEvent), nil, '', THiddenPropertyEditor);
-  RegisterPropertyEditor(TypeInfo(TTVCustomDrawItemEvent), nil, '', THiddenPropertyEditor);
-  RegisterPropertyEditor(TypeInfo(TTVExpandedEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVEditedEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVEditingEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTVEditingEndEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TControlShowHintEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TUTF8KeyPressEvent), nil, '', THiddenPropertyEditor);
-  RegisterPropertyEditor(TypeInfo(TMouseWheelEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTabChangingEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TTabGetImageEvent), nil, '', THiddenPropertyEditor);
   RegisterPropertyEditor(TypeInfo(TGetSiteInfoEvent), nil, '', THiddenPropertyEditor);

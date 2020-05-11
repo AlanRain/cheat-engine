@@ -5,7 +5,13 @@ unit frmStackViewUnit;
 interface
 
 uses
-  windows, cefuncproc, newkernelhandler, Classes, SysUtils, FileUtil, LResources,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  cefuncproc, newkernelhandler, Classes, SysUtils, FileUtil, LResources,
   Forms, Controls, Graphics, Dialogs, StdCtrls, Menus, stacktrace2, Clipbrd, ComCtrls,
   strutils, frmSelectionlistunit, maps;
 
@@ -16,6 +22,7 @@ type
   TfrmStackView = class(TForm)
     ColorDialog1: TColorDialog;
     FindDialog1: TFindDialog;
+    svImageList: TImageList;
     lvStack: TListView;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
@@ -118,11 +125,24 @@ procedure TfrmStackView.PopupMenu1Popup(Sender: TObject);
 var
   x: ptruint;
 begin
+  if processhandler.is64Bit then
+  begin
+    miAddESP.Caption:='(rsp+*)';
+    miAddEBP.Caption:='(rbp+*)';
+  end else
+  begin
+    miAddESP.Caption:='(esp+*)';
+    miAddEBP.Caption:='(ebp+*)';
+  end;
+
   if lvStack.selected<>nil then
   begin
     x:=ptruint(lvstack.selected.data);
     miAddRef.caption:=format('(ref+*) Ref will be %x',[x]);
   end;
+
+  miAddEBP.Enabled:=(c.{$ifdef cpu64}rbp{$else}ebp{$endif}<>0);
+  if not miAddEBP.Enabled and miAddEBP.Checked then miAddESP.Checked:=true;
 end;
 
 procedure TfrmStackView.lvStackDblClick(Sender: TObject);
@@ -445,7 +465,7 @@ begin
     else
     if miAddEBP.checked then
     begin
-      refname:='ebp';
+      refname:='rbp';
       if not processhandler.is64Bit then
         refname[1]:='e';
 

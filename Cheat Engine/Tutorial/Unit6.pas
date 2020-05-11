@@ -33,7 +33,7 @@ var
 
 implementation
 
-uses Unit4, Unit7;
+uses Unit4, Unit7, frmHelpUnit;
 
 resourcestring
   rsWellDoneYouScrewedUpTheTutorial = 'Well done, you screwed up the tutorial!!!!';
@@ -43,7 +43,7 @@ resourcestring
   rsLOSER = 'BOO';
 
   rsTutorialStep5=
-      'Sometimes the location something is stored at changes when you restart the game, or even while you''re playing.. In '+
+      'Sometimes the location of where something is stored at changes when you restart the game, or even while you''re playing.. In '+
       'that case you can use 2 things to still make a table that works.'+#13#10+
       'In this step I''ll try to describe how to use the Code Finder function.'+#13#10+
       ''+#13#10+
@@ -115,6 +115,7 @@ begin
   memo1.Lines.Insert(0, Format(rsStep5CodeFinderPW, [inttostr(888899)]));
   memo1.SelStart:=0;
   font.size:=12;
+  frmHelp.attach(self,'5');
 end;
 
 procedure TForm6.FormClose(Sender: TObject; var Action: TCloseAction);

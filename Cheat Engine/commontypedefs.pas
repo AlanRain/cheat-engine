@@ -26,6 +26,11 @@ Type TBytes = array of integer; //An array that represents a row of byte. Ints a
      TWindowPosArray=TBytes;
 
 type tfloatscan=(rounded,extremerounded,truncated);
+type TMemoryRegionSmall = record
+  Address: ptruint;
+  size: qword;
+end;
+
 Type TMemoryRegion = record
   BaseAddress: ptrUint;
   MemorySize: qword;
@@ -63,8 +68,9 @@ type
 
 type TProcessListInfo=record
   processID: dword;
+  winhandle: HWND;
   processIcon: HICON;
-  issystemprocess: boolean;
+  //issystemprocess: boolean;
 end;
 PProcessListInfo=^TProcessListInfo;
 

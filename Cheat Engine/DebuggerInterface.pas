@@ -9,10 +9,10 @@ The other debugger interfaces are inherited from this
 interface
 
 uses
-  Classes, SysUtils{$ifdef windows},windows{$endif},NewKernelHandler, debuggertypedefinitions{$ifdef darwin}, macport{$endif};
+  Classes, SysUtils{$ifdef windows},windows{$endif},NewKernelHandler, debuggertypedefinitions{$ifdef darwin}, macport, macportdefines{$endif};
 
 type
-  TDebuggerCapabilities=(dbcHardwareBreakpoint, dbcSoftwareBreakpoint, dbcExceptionBreakpoint, dbcBreakOnEntry);
+  TDebuggerCapabilities=(dbcHardwareBreakpoint, dbcSoftwareBreakpoint, dbcExceptionBreakpoint, dbcDBVMBreakpoint, dbcBreakOnEntry);
   TDebuggerCapabilitiesSet=set of TDebuggerCapabilities;
   TDebuggerInterface=class
   protected
@@ -34,6 +34,7 @@ type
     function DebugActiveProcess(dwProcessId: DWORD): BOOL; virtual; abstract;
     function DebugActiveProcessStop(dwProcessID: DWORD): BOOL; virtual;
     function GetLastBranchRecords(lbr: pointer): integer; virtual;
+    function isInjectedEvent: boolean; virtual;
 
     function inNoBreakList(threadid: integer): boolean; virtual;
     procedure AddToNoBreakList(threadid: integer); virtual;
@@ -85,6 +86,11 @@ function TDebuggerInterface.GetLastBranchRecords(lbr: pointer): integer;
 begin
   //if implemented fill in the lbr pointer with the lbr records (array of qwords) and return the count (max 16)
   result:=-1;
+end;
+
+function TDebuggerInterface.isInjectedEvent: boolean;
+begin
+  result:=false;
 end;
 
 function TDebuggerInterface.inNoBreakList(threadid: integer): boolean;

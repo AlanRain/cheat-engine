@@ -9,10 +9,16 @@ This unit will create a map that holds the addresses of all the strings in the g
 interface
 
 uses
-  windows, Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics,
   Dialogs, math, ComCtrls, ExtCtrls, StdCtrls, maps, Menus, cefuncproc,
-  memfuncs, newkernelhandler, AvgLvlTree, bigmemallochandler, symbolhandler,
-  oldRegExpr, commonTypeDefs;
+  MemFuncs, NewKernelHandler, AvgLvlTree, bigmemallochandler, symbolhandler,
+  oldRegExpr, commonTypeDefs, LCLIntf, LCLType;
 
 type
 
@@ -54,6 +60,7 @@ type
     cbSaveToDisk: TCheckBox;
     edtRegExp: TEdit;
     FindDialog1: TFindDialog;
+    smImageList: TImageList;
     lblStringCount: TLabel;
     ListView1: TListView;
     miFind: TMenuItem;
@@ -174,7 +181,7 @@ end;
 
 procedure TStringScan.execute;
 var buf: PByteArray;
-  maxbuf: integer;
+  maxbuf: uint64;
   address: ptruint;
 
   total: ptruint;
@@ -209,12 +216,20 @@ begin
       begin
         maxbuf:=0; //find the max size
         for i:=0 to length(mr)-1 do
+{$if FPC_FULLVERSION<30200}
+          maxbuf:=max(int64(mr[i].MemorySize), maxbuf);
+{$else}
           maxbuf:=max(mr[i].MemorySize, maxbuf);
+{$endif}
 
         if maxbuf=0 then
           raise exception.create(rsNoReadableMemoryFound);
 
+{$if FPC_FULLVERSION<30200}
         maxbuf:=min(maxbuf, 512*1024);
+{$else}
+        maxbuf:=min(maxbuf, qword(512*1024));
+{$endif}
 
         getmem(buf, maxbuf);
 

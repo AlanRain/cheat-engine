@@ -1,3 +1,5 @@
+// Copyright Cheat Engine. All Rights Reserved.
+
 unit memscan;
 
 {$MODE Delphi}
@@ -12,20 +14,25 @@ Special care should be taken to add multithreaded scanning routines
 
 interface
 
-{$ifdef windows}
-uses windows, FileUtil, LCLIntf,sysutils, classes,ComCtrls,dialogs, NewKernelHandler,math,
-     SyncObjs, windows7taskbar,SaveFirstScan, savedscanhandler, autoassembler,
-     symbolhandler, CEFuncProc,shellapi, customtypehandler,lua,lualib,lauxlib,
-     LuaHandler, fileaccess, groupscancommandparser, commonTypeDefs, LazUTF8, forms, LazFileUtils;
-{$define customtypeimplemented}
-{$endif}
 
-{$ifdef unix}
+{$ifdef jni}
 uses sysutils, unixporthelper, customtypehandler, commonTypeDefs, classes,
      syncobjs, math, groupscancommandparser, NewKernelHandler, strutils,
      savedscanhandler;
-
-
+{$else}
+uses
+     {$ifdef darwin}
+     macport, macportdefines, LCLType,
+     {$endif}
+     {$ifdef windows}
+     windows,
+     {$endif}
+     FileUtil, LCLIntf,sysutils, classes,ComCtrls,dialogs, NewKernelHandler,math,
+     SyncObjs {$ifdef windows},windows7taskbar{$endif},SaveFirstScan, savedscanhandler, autoassembler,
+     symbolhandler, CEFuncProc{$ifdef windows},shellapi{$endif}, CustomTypeHandler, lua,lualib,lauxlib,
+     LuaHandler, {$ifdef windows}fileaccess,{$endif} groupscancommandparser, commonTypeDefs, LazUTF8,
+     forms, LazFileUtils, LCLProc, LCLVersion;
+{$define customtypeimplemented}
 {$endif}
 
 
@@ -39,6 +46,8 @@ type
   Tscanregionpreference=(scanDontCare, scanExclude, scanInclude);
   TAddresses=array of PtrUInt;
 
+
+  TPostScanState=(psJustFinished, psOptimizingScanResults, psTerminatingThreads, psSavingFirstScanResults, psShouldBeFinished, psSavingFirstScanResults2);
 
 type
   TMemScan=class;
@@ -149,6 +158,8 @@ type
     savedscanhandler: Tsavedscanhandler;
     scandir: string;
 
+    L: Plua_State;
+
     previousmemoryfile: TFilestream;
 
     found :dword;
@@ -224,6 +235,7 @@ type
     function ByteDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function ByteChanged(newvalue,oldvalue: pointer): boolean;
     function ByteUnChanged(newvalue,oldvalue: pointer): boolean;
+    function ByteLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function WordExact(newvalue,oldvalue: pointer): boolean;
     function WordBetween(newvalue,oldvalue: pointer): boolean;
@@ -239,6 +251,7 @@ type
     function WordDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function WordChanged(newvalue,oldvalue: pointer): boolean;
     function WordUnChanged(newvalue,oldvalue: pointer): boolean;
+    function WordLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function DWordExact(newvalue,oldvalue: pointer): boolean;
     function DWordBetween(newvalue,oldvalue: pointer): boolean;
@@ -254,7 +267,7 @@ type
     function DWordDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function DwordChanged(newvalue,oldvalue: pointer): boolean;
     function DwordUnChanged(newvalue,oldvalue: pointer): boolean;
-
+    function DWordLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function QWordExact(newvalue,oldvalue: pointer): boolean;
     function QWordBetween(newvalue,oldvalue: pointer): boolean;
@@ -270,6 +283,7 @@ type
     function QWordDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function QWordChanged(newvalue,oldvalue: pointer): boolean;
     function QwordUnChanged(newvalue,oldvalue: pointer): boolean;
+    function QWordLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function SingleExact(newvalue,oldvalue: pointer): boolean;
     function SingleBetween(newvalue,oldvalue: pointer): boolean;
@@ -284,6 +298,7 @@ type
     function SingleDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function SingleChanged(newvalue,oldvalue: pointer): boolean;
     function singleUnChanged(newvalue,oldvalue: pointer): boolean;
+    function SingleLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function DoubleExact(newvalue,oldvalue: pointer): boolean;
     function DoubleBetween(newvalue,oldvalue: pointer): boolean;
@@ -298,6 +313,7 @@ type
     function DoubleDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function DoubleChanged(newvalue,oldvalue: pointer): boolean;
     function DoubleUnChanged(newvalue,oldvalue: pointer): boolean;
+    function DoubleLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function AllUnknown(newvalue,oldvalue: pointer):boolean; //check byte,word,dword,qword,single and float
     function AllExact(newvalue,oldvalue: pointer):boolean; //check byte,word,dword,qword,single and float
@@ -314,6 +330,7 @@ type
     function AllDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function AllChanged(newvalue,oldvalue: pointer): boolean;
     function AllUnchanged(newvalue,oldvalue: pointer): boolean;
+    function AllLuaFormula(newvalue,oldvalue: pointer):boolean; //check byte,word,dword,qword,single and float
 
     function CustomExact(newvalue,oldvalue: pointer): boolean;
     function CustomBetween(newvalue,oldvalue: pointer): boolean;
@@ -329,6 +346,7 @@ type
     function CustomDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function CustomChanged(newvalue,oldvalue: pointer): boolean;
     function CustomUnChanged(newvalue,oldvalue: pointer): boolean;
+    function CustomLuaFormula(newvalue,oldvalue: pointer): boolean;
 
     function CustomFloatExact(newvalue,oldvalue: pointer): boolean;
     function CustomFloatBetween(newvalue,oldvalue: pointer): boolean;
@@ -343,6 +361,7 @@ type
     function CustomFloatDecreasedValueByPercentage(newvalue,oldvalue: pointer): boolean;
     function CustomFloatChanged(newvalue,oldvalue: pointer): boolean;
     function CustomFloatUnChanged(newvalue,oldvalue: pointer): boolean;
+    function CustomFloatLuaFormula(newvalue,oldvalue: pointer): boolean;
 
 
     function ArrayOfBytesExact_NibbleWildcardSupport(newvalue: pointer; mabsindex: integer):boolean;
@@ -405,7 +424,7 @@ type
 
     PreviousOffsetCount: integer; //holds the offsecount of the previous scan (for calculating the entry position)
 
-
+    luaformula: boolean;
     unicode: boolean;
     caseSensitive: boolean;
     percentage: boolean;
@@ -495,6 +514,9 @@ type
     scanWritable: Tscanregionpreference;
     scanExecutable: Tscanregionpreference;
     scanCopyOnWrite: Tscanregionpreference;
+    {$ifdef darwin}
+    scanDirty: Tscanregionpreference;
+    {$endif}
 
     roundingtype: TRoundingType;
     hexadecimal: boolean;
@@ -545,6 +567,8 @@ type
 
     floatscanWithoutExponents: boolean;
     inverseScan: boolean;
+    luaformula: boolean;
+    isUnique: boolean;
 
     procedure execute; override;
     constructor create(suspended: boolean);
@@ -571,19 +595,11 @@ type
     //notifywindow: thandle;
    // notifymessage: integer;
 
-    currentVariableType: TVariableType;
-    currentCustomType: TCustomType;
-
     found: uint64;
-
-    //first scan init variables
-    startaddress: ptruint; //start for the whole scan
-    stopaddress: ptruint; //stop of the whole scan
 
     //fastscan options (only set by firstscan)
     //Alignment: integer;
     fastscanalignment: integer;
-    fastscanmethod: TFastscanmethod;
     fastscandigitcount: integer;
 
     //string stuff:
@@ -601,23 +617,51 @@ type
     fscanresultfolder: string; //the location where all the scanfiles will be stored
 
     fCodePage: boolean;
+    fLuaFormula: boolean;
 
     fnextscanCount: integer;
 
 
     savedresults: tstringlist;
     fonlyOne: boolean;
-    fisHexadecimal: boolean;
+    fIsUnique: boolean;
+
 
     ffloatscanWithoutExponents: boolean;
     fInverseScan: boolean;
     fGUIScanner: boolean;
+    fbusyformIsModal: boolean;
 
+    //scan params
+    fScanOption: TScanoption;
+    fVariableType: TVariableType;
+    froundingtype: TRoundingType;
+    fscanvalue1: string;
+    fscanvalue2: string;
+    fstartaddress: ptruint;
+    fstopaddress: ptruint;
+    fhexadecimal: boolean;
+    fbinaryStringAsDecimal: boolean;
+    funicode: boolean;
+    fcasesensitive: boolean;
+    ffastscanmethod: TFastScanMethod;
+    ffastscanparameter: string;
+    fcustomtype: TCustomType;
+
+    //next scan params
+    fpercentage: boolean;
+    fcompareToSavedScan: boolean;
+    fsavedscanname: string;
+
+    fscanWritable: Tscanregionpreference;
+    fscanExecutable: Tscanregionpreference;
+    fscanCopyOnWrite: Tscanregionpreference;
 
 
     procedure DeleteScanfolder;
     procedure createScanfolder;
     function DeleteFolder(dir: string) : boolean;
+    procedure setVariableType(t: TVariableType);
   protected
     fOnScanDone: TNotifyEvent;
     fOnInitialScanDone: TNotifyEvent;
@@ -625,14 +669,16 @@ type
     procedure ScanDone; virtual; //called by the scancontroller
     procedure InitialScanDone; virtual;
   public
+    postScanState: TPostScanState;
 
 
 
-    scanWritable: Tscanregionpreference;
-    scanExecutable: Tscanregionpreference;
-    scanCopyOnWrite: Tscanregionpreference;
+    {$ifdef darwin}
+    scanDirty: Tscanregionpreference;
+    {$endif}
 
     attachedFoundlist: TObject;
+
 
     function GetLastScanWasRegionScan: boolean;
 
@@ -647,8 +693,10 @@ type
     function GetScanFolder: string;
     procedure TerminateScan(forceTermination: boolean);
     procedure newscan; //will clean up the memory and files
-    procedure firstscan(scanOption: TScanOption; VariableType: TVariableType; roundingtype: TRoundingType; scanvalue1, scanvalue2: string; startaddress,stopaddress: ptruint; hexadecimal,binaryStringAsDecimal,unicode,casesensitive: boolean; fastscanmethod: TFastScanMethod=fsmNotAligned; fastscanparameter: string=''; customtype: TCustomType=nil);
-    procedure NextScan(scanOption: TScanOption; roundingtype: TRoundingType; scanvalue1, scanvalue2: string; hexadecimal,binaryStringAsDecimal, unicode, casesensitive,percentage,compareToSavedScan: boolean; savedscanname: string); //next scan, determine what kind of scan and give to firstnextscan/nextnextscan
+    procedure firstscan(_scanOption: TScanOption; _VariableType: TVariableType; _roundingtype: TRoundingType; _scanvalue1, _scanvalue2: string; _startaddress,_stopaddress: ptruint; _hexadecimal,_binaryStringAsDecimal,_unicode,_casesensitive: boolean; _fastscanmethod: TFastScanMethod=fsmNotAligned; _fastscanparameter: string=''; _customtype: TCustomType=nil); overload;
+    procedure NextScan(_scanOption: TScanOption; _roundingtype: TRoundingType; _scanvalue1, _scanvalue2: string; _hexadecimal,_binaryStringAsDecimal, _unicode, _casesensitive, _percentage, _compareToSavedScan: boolean; _savedscanname: string); overload; //next scan, determine what kind of scan and give to firstnextscan/nextnextscan
+    procedure FirstScan; overload;
+    procedure NextScan; overload;
     function waittilldone(timeout: dword=INFINITE): boolean;
     function waittillreallydone(timeout: dword=INFINITE): boolean;
 
@@ -672,18 +720,49 @@ type
     property inverseScan: boolean read fInverseScan write fInverseScan;
     property floatscanWithoutExponents: boolean read ffloatscanWithoutExponents write ffloatscanWithoutExponents;
     property OnlyOne: boolean read fOnlyOne write fOnlyOne;
-    property VarType: TVariableType read currentVariableType;
-    property CustomType: TCustomType read currentCustomType;
+    property VarType: TVariableType read fVariableType write setVariableType;
     property codePage: boolean read fCodePage write fCodePage;
+    property LuaFormula: boolean read fLuaFormula write fLuaFormula;
+    property isUnique: boolean read fIsUnique write fIsUnique; //for AOB scans only
     property lastScanWasRegionScan: boolean read getLastScanWasRegionScan;
     property isUnicode: boolean read stringUnicode;
-    property isHexadecimal: boolean read fisHexadecimal; //gui
+    property isHexadecimal: boolean read fHexadecimal; //gui
     property LastScanValue: string read fLastScanValue;
     property LastScanType: TScanType read FLastScanType;
     property ScanresultFolder: string read fScanResultFolder; //read only, it's configured during creation
+    property BusyformIsModal: boolean read fbusyformIsModal write fbusyformIsModal;
     property OnScanDone: TNotifyEvent read fOnScanDone write fOnScanDone;
     property OnInitialScanDone: TNotifyEvent read fOnInitialScanDone write fOnInitialScanDone;
     property OnGuiUpdate: TMemscanGuiUpdateRoutine read fOnGuiUpdate write fOnGuiUpdate;
+
+    //scan properties
+    property ScanOption: TScanoption read fScanOption write fScanOption;
+    property VariableType: TVariableType read fVariableType write setVariableType;
+    property Roundingtype: TRoundingType read froundingtype write froundingtype;
+    property Scanvalue: string read fscanvalue1 write fscanvalue1;
+    property Scanvalue1: string read fscanvalue1 write fscanvalue1;
+    property Scanvalue2: string read fscanvalue2 write fscanvalue2;
+    property Startaddress: ptruint read fstartaddress write fstartaddress;
+    property Stopaddress: ptruint read fstopaddress write fstopaddress;
+    property Hexadecimal: boolean read fhexadecimal write fhexadecimal;
+    property BinaryStringAsDecimal: boolean read fbinaryStringAsDecimal write fbinaryStringAsDecimal;
+    property Unicode: boolean read funicode write funicode;
+    property UTF16: boolean read funicode write funicode;
+    property Casesensitive: boolean read fcasesensitive write fcasesensitive;
+    property Fastscanmethod: TFastScanMethod read ffastscanmethod write ffastscanmethod;
+    property Fastscanparameter: string read ffastscanparameter write ffastscanparameter;
+    property Customtype: TCustomType read fcustomtype write fcustomtype;
+
+    //next scan specific:
+    property Percentage: boolean read fPercentage write fPercentage;
+    property CompareToSavedScan: boolean read fcompareToSavedScan write fcompareToSavedScan;
+    property SavedScanName: string read fsavedscanname write fsavedscanname;
+
+    property scanWritable: Tscanregionpreference read fscanWritable write fscanWritable;
+    property scanExecutable: Tscanregionpreference read fscanExecutable write fscanExecutable;
+    property scanCopyOnWrite: Tscanregionpreference read fscanCopyOnWrite write fscanCopyOnWrite;
+
+//    property percentage
   end;
 
 
@@ -692,12 +771,12 @@ type
 
 implementation
 
-{$ifdef windows}
-uses formsettingsunit, StrUtils, foundlisthelper, processhandlerunit, parsers,Globals, frmBusyUnit;
-{$endif}
 
 {$ifdef android}
 uses ProcessHandlerUnit, parsers, Globals;
+{$else}
+uses formsettingsunit, StrUtils, foundlisthelper, ProcessHandlerUnit, parsers,
+     Globals, {$ifdef windows}frmBusyUnit,{$endif} controls;
 {$endif}
 
 resourcestring
@@ -769,7 +848,7 @@ end;
 
 constructor TGroupData.create(parameters: string; scanner: TScanner);
 //todo: convert groupscancommandparser to unix
-{$ifndef unix}
+{$ifndef jni}
 var start, i: integer;
   p,s: string;
 
@@ -778,7 +857,7 @@ var start, i: integer;
   floatsettings: TFormatSettings;
 {$endif}
 begin
-{$ifndef unix}
+{$ifndef jni}
   floatsettings:=DefaultFormatSettings;
   fscanner:=scanner;
 
@@ -905,12 +984,20 @@ begin
       vtSingle:
       begin
         result:=groupdata[i].wildcard or ((psingle(newvalue)^>groupdata[i].minfvalue) and (psingle(newvalue)^<groupdata[i].maxfvalue)); //default extreme rounded
+
+        if result and (floatscanWithoutExponents and (pdword(newvalue)^>0) and (abs(127-(pdword(newvalue)^ shr 23) and $ff)>10)) then
+          result:=false;
+
         inc(newvalue, 4);
       end;
 
       vtDouble:
       begin
         result:=groupdata[i].wildcard or ((pdouble(newvalue)^>groupdata[i].minfvalue) and (pdouble(newvalue)^<groupdata[i].maxfvalue));
+
+        if result and (floatscanWithoutExponents and (pqword(newvalue)^>0) and (abs(integer(1023-(pqword(newvalue)^ shr 52) and $7ff))>10)) then
+          result:=false;
+
         inc(newvalue, 8);
       end;
 
@@ -1117,7 +1204,7 @@ var current: pointer;
   align: integer;
 begin
 
-  {$IFNDEF UNIX}
+  {$IFNDEF jni}
   result:=false;
   if outoforder_aligned then
     align:=4
@@ -1128,7 +1215,7 @@ begin
   inc(current, startoffset);
   i:=startoffset;
 
-  while i<(blocksize-ct.bytesize-1) do
+  while i<(blocksize-(ct.bytesize-1)) do
   begin
     if ct.ConvertDataToInteger(current, fscanner.currentAddress)=value then
     begin
@@ -1161,7 +1248,7 @@ begin
   inc(current, startoffset);
   i:=startoffset;
 
-  while i<(blocksize-ct.bytesize-1) do
+  while i<(blocksize-(ct.bytesize-1)) do
   begin
     f:=ct.ConvertDataToFloat(current, fscanner.currentAddress);
     if (f>minf) and (f<maxf) then
@@ -1400,6 +1487,51 @@ begin
         customtypesmatch[j]:=customtypesmatch[j] and (CustomFloatExact(newvalue,oldvalue) xor inverseScan)
       else
         customtypesmatch[j]:=customtypesmatch[j] and (CustomExact(newvalue,oldvalue) xor inverseScan)
+    end;
+  end;
+  {$ENDIF}
+
+  result:=false;
+  for i:=vtbyte to vtdouble do
+    if typesmatch[i] then
+    begin
+      result:=true;
+      exit;
+    end;
+
+  if allCustom then
+    for j:=0 to customtypecount-1 do
+      if customtypesmatch[j] then
+      begin
+        result:=true;
+        exit;
+      end;
+
+end;
+
+function TScanner.AllLuaFormula(newvalue,oldvalue: pointer):boolean;
+var i: TVariableType;
+  j: integer;
+begin
+  typesmatch[vtByte]:=typesmatch[vtByte] and (ByteLuaFormula(newvalue,oldvalue) xor inverseScan); //oldvalue=nil, but give it anyhow
+  typesmatch[vtWord]:=typesmatch[vtWord] and (WordLuaFormula(newvalue,oldvalue) xor inverseScan);
+  typesmatch[vtDword]:=typesmatch[vtDword] and (DwordLuaFormula(newvalue,oldvalue) xor inverseScan);
+  typesmatch[vtQword]:=typesmatch[vtQword] and (qwordLuaFormula(newvalue,oldvalue) xor inverseScan);
+  typesmatch[vtSingle]:=typesmatch[vtSingle] and (singleLuaFormula(newvalue,oldvalue) xor inverseScan);
+  typesmatch[vtDouble]:=typesmatch[vtDouble] and (doubleLuaFormula(newvalue,oldvalue) xor inverseScan);
+
+  {$ifdef customtypeimplemented}
+  if allCustom then
+  begin
+    //also scan custom types
+    for j:=0 to customtypecount-1 do
+    begin
+      customtype:=tcustomtype(customTypes[j]);
+
+      if customtype.scriptUsesFloat then
+        customtypesmatch[j]:=customtypesmatch[j] and (CustomFloatLuaFormula(newvalue,oldvalue) xor inverseScan)
+      else
+        customtypesmatch[j]:=customtypesmatch[j] and (CustomLuaFormula(newvalue,oldvalue) xor inverseScan)
     end;
   end;
   {$ENDIF}
@@ -2161,6 +2293,21 @@ begin
   result:=pbyte(newvalue)^=byte(value);
 end;
 
+function TScanner.ByteLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushinteger(L,pbyte(newvalue)^);
+  if oldvalue<>nil then
+    lua_pushinteger(L,pbyte(oldvalue)^)
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
+end;
+
 function TScanner.ByteBetween(newvalue,oldvalue: pointer):boolean;
 begin
   result:=(pbyte(newvalue)^>=byte(value)) and (pbyte(newvalue)^<=byte(value2));
@@ -2235,6 +2382,21 @@ begin
   result:=pword(newvalue)^=word(value);
 end;
 
+function TScanner.WordLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushinteger(L,pword(newvalue)^);
+  if oldvalue<>nil then
+    lua_pushinteger(L,pword(oldvalue)^)
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
+end;
+
 function TScanner.WordBetween(newvalue,oldvalue: pointer):boolean;
 begin
   result:=(pword(newvalue)^>=word(value)) and (pword(newvalue)^<=word(value2));
@@ -2307,6 +2469,21 @@ begin
   {$ifdef customtypeimplemented}
   result:=customType.ConvertDataToInteger(newvalue, currentAddress)=integer(value);
   {$ENDIF}
+end;
+
+function TScanner.CustomLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushinteger(L,customType.ConvertDataToInteger(newvalue, currentAddress));
+  if oldvalue<>nil then
+    lua_pushinteger(L,customType.ConvertDataToInteger(oldvalue, currentAddress))
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
 end;
 
 function TScanner.CustomBetween(newvalue,oldvalue: pointer): boolean;
@@ -2424,6 +2601,22 @@ begin
   {$ENDIF}
 
 end;
+
+function TScanner.CustomFloatLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushnumber(L,customType.ConvertDataToFloat(newvalue, currentAddress));
+  if oldvalue<>nil then
+    lua_pushnumber(L,customType.ConvertDataToFloat(oldvalue, currentAddress))
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
+end;
+
 
 function TScanner.CustomFloatBetween(newvalue,oldvalue: pointer):boolean;
 var f: single;
@@ -2545,6 +2738,22 @@ begin
   result:=pdword(newvalue)^=dword(value);
 end;
 
+function TScanner.DWordLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+
+  lua_pushinteger(L,pdword(newvalue)^);
+  if oldvalue<>nil then
+    lua_pushinteger(L,pdword(oldvalue)^)
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
+end;
+
 function TScanner.DWordBetween(newvalue,oldvalue: pointer):boolean;
 begin
   result:=(pdword(newvalue)^>=dword(value)) and (pdword(newvalue)^<=dword(value2));
@@ -2616,6 +2825,21 @@ end;
 function TScanner.QWordExact(newvalue,oldvalue: pointer): boolean;
 begin
   result:=PQWORD(newvalue)^=QWORD(value);
+end;
+
+function TScanner.QWordLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushinteger(L,pqword(newvalue)^);
+  if oldvalue<>nil then
+    lua_pushinteger(L,pqword(oldvalue)^)
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
 end;
 
 function TScanner.QWordBetween(newvalue,oldvalue: pointer):boolean;
@@ -2695,12 +2919,27 @@ begin
       result:=(RoundTo(psingle(newvalue)^,-floataccuracy)=svalue);
 
     rtExtremerounded:
-      result:=(psingle(newvalue)^>minsvalue) and (psingle(newvalue)^<maxsvalue);
+      result:=(psingle(newvalue)^>=minsvalue) and (psingle(newvalue)^<=maxsvalue);
 
     rtTruncated:
       result:=(psingle(newvalue)^>=svalue) and (psingle(newvalue)^<maxsvalue);
   end;
 
+end;
+
+function TScanner.SingleLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushnumber(L,psingle(newvalue)^);
+  if oldvalue<>nil then
+    lua_pushnumber(L,psingle(oldvalue)^)
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
 end;
 
 function TScanner.SingleBetween(newvalue,oldvalue: pointer):boolean;
@@ -2777,6 +3016,21 @@ begin
     rtTruncated:
       result:=(pdouble(newvalue)^>=dvalue) and (pdouble(newvalue)^<maxdvalue);
   end;
+end;
+
+function TScanner.DoubleLuaFormula(newvalue,oldvalue: pointer): boolean;
+begin
+  lua_pushvalue(L,-1);
+  lua_pushnumber(L,pdouble(newvalue)^);
+  if oldvalue<>nil then
+    lua_pushnumber(L,pdouble(oldvalue)^)
+  else
+    lua_pushnil(L);
+
+  lua_call(L,2,1);
+
+  result:=lua_toboolean(L,-1);
+  lua_pop(L,1);
 end;
 
 function TScanner.DoubleBetween(newvalue,oldvalue: pointer):boolean;
@@ -3369,6 +3623,8 @@ begin
     end
     else
     begin
+
+      lastpart:=10210;
       while (ptruint(p)<=lastmem) do
       begin
         if checkroutine(p,nil) xor inv then //found one
@@ -3383,6 +3639,7 @@ begin
 
         inc(p,stepsize);
       end;
+      lastpart:=10211;
     end;
 
   end;
@@ -3974,9 +4231,9 @@ begin
   end;
   {$ENDIF}
 
-  OutputDebugString('configurescanroutine');
+  //OutputDebugString('configurescanroutine');
 
-  OutputDebugString('Config 1');
+  //OutputDebugString('Config 1');
 
 
   foundbuffersize:=0;
@@ -3996,9 +4253,13 @@ begin
     //user input is given
     if scanvalue1='' then raise exception.Create(rsPleaseFillSomethingIn);
 
-    if variableType in [vtByte,vtWord,vtDWord,vtQword,vtAll,vtCustom] then
+
+    if (not luaformula) and (variableType in [vtByte,vtWord,vtDWord,vtQword,vtAll,vtCustom]) then
     begin
       //parse scanvalue1
+
+      scanvalue1:=trim(scanvalue1);
+      scanvalue2:=trim(scanvalue2);
       try
         if hexadecimal then
           value:=StrToQWord('$'+scanvalue1)
@@ -4022,13 +4283,13 @@ begin
               dvalue:=strtofloat(scanvalue1,FloatSettings);
             except
               //see if lua knows better
-              {$IFNDEF UNIX}
+              {$IFNDEF jni}
               try
                 dvalue:=lua_strtofloat(scanvalue1);
               except
               {$ENDIF}
                 raise exception.Create(Format(rsIsNotAValidValue, [scanvalue1]));
-              {$IFNDEF UNIX}
+              {$IFNDEF jni}
               end;
               {$ENDIF}
 
@@ -4039,13 +4300,13 @@ begin
         end else
         begin
           //not a float type, perhaps lua knows how to handle it
-          {$IFNDEF UNIX}
+          {$IFNDEF jni}
           try
             value:=lua_strtoint(scanvalue1);
           except
           {$ENDIF}
             raise exception.Create(Format(rsIsAnInvalidValue, [scanvalue1]));
-          {$IFNDEF UNIX}
+          {$IFNDEF jni}
           end;
           {$ENDIF}
         end;
@@ -4076,13 +4337,13 @@ begin
                 dvalue:=strtofloat(scanvalue2,FloatSettings);
               except
                 //see if lua knows better
-                {$IFNDEF UNIX}
+                {$IFNDEF jni}
                 try
                   dvalue:=lua_strtofloat(scanvalue2);
                 except
                 {$ENDIF}
                   raise exception.Create(Format(rsIsNotAValidValue, [scanvalue2]));
-                {$IFNDEF UNIX}
+                {$IFNDEF jni}
                 end;
                 {$ENDIF}
               end;
@@ -4092,13 +4353,13 @@ begin
           else
           begin
             //perhaps lua knows what it is
-            {$IFNDEF UNIX}
+            {$IFNDEF jni}
             try
               value2:=lua_strtoint(scanvalue2);
             except
             {$ENDIF}
               raise exception.Create(Format(rsIsAnInvalidValue, [scanvalue2]));
-            {$IFNDEF UNIX}
+            {$IFNDEF jni}
             end;
             {$ENDIF}
 
@@ -4107,7 +4368,7 @@ begin
       end;
     end;
 
-    if percentage or (variableType in [vtsingle,vtDouble,vtAll, vtCustom]) then
+    if (not luaformula) and (percentage or (variableType in [vtsingle,vtDouble,vtAll, vtCustom])) then
     begin
       try
         if hexadecimal then
@@ -4125,13 +4386,13 @@ begin
           dvalue:=strtofloat(scanvalue1,FloatSettings);
         except
           //try lua
-          {$IFNDEF UNIX}
+          {$IFNDEF jni}
           try
             dvalue:=lua_strtofloat(scanvalue1);
           except
           {$ENDIF}
             raise exception.Create(Format(rsIsNotAValidValue, [scanvalue1]));
-          {$IFNDEF UNIX}
+          {$IFNDEF jni}
           end;
           {$ENDIF}
         end;
@@ -4155,13 +4416,13 @@ begin
             dvalue2:=strtofloat(scanvalue2,FloatSettings);
           except
             //and again
-            {$IFNDEF UNIX}
+            {$IFNDEF jni}
             try
               dvalue2:=lua_strtofloat(scanvalue2);
             except
             {$ENDIF}
               raise exception.Create(Format(rsIsNotAValidValue, [scanvalue2]));
-            {$IFNDEF UNIX}
+            {$IFNDEF jni}
             end;
             {$ENDIF}
           end;
@@ -4199,7 +4460,7 @@ begin
       else
         floataccuracy:=0;
 
-      if not percentage then
+      if (floataccuracy<>0) and not percentage then
       begin
         svalue:=RoundTo(svalue,-floataccuracy);
         svalue2:=RoundTo(svalue2,-floataccuracy);
@@ -4207,10 +4468,21 @@ begin
         dvalue2:=RoundTo(dvalue2,-floataccuracy);
       end;
 
-      mindvalue:=dvalue-(1/(power(10,floataccuracy)));
-      maxdvalue:=dvalue+(1/(power(10,floataccuracy)));
-      minsvalue:=svalue-(1/(power(10,floataccuracy)));
-      maxsvalue:=svalue+(1/(power(10,floataccuracy)));
+      if floataccuracy<>0 then
+      begin
+        mindvalue:=dvalue-(1/(power(10,floataccuracy)));
+        maxdvalue:=dvalue+(1/(power(10,floataccuracy)));
+        minsvalue:=svalue-(1/(power(10,floataccuracy)));
+        maxsvalue:=svalue+(1/(power(10,floataccuracy)));
+      end
+      else
+      begin
+        mindvalue:=dvalue-1;
+        maxdvalue:=dvalue+1;
+
+        minsvalue:=svalue-1;
+        maxsvalue:=svalue+1;
+      end;
 
     end;
                   
@@ -4308,7 +4580,7 @@ begin
 
 
 
-  OutputDebugString('Config 2');
+  //OutputDebugString('Config 2');
 
   FlushRoutine:=genericFlush; //change if not so
 
@@ -4332,19 +4604,20 @@ begin
     getmem(SecondaryAddressBuffer,maxfound*sizeof(ptruint));
   end;
 
-  OutputDebugString('Config 3');
+  //OutputDebugString('Config 3');
   if compareToSavedScan then //create a first scan handler
   begin
-    OutputDebugString('Compare to saved scan');
+    //OutputDebugString('Compare to saved scan');
     savedscanhandler:=Tsavedscanhandler.create(scandir,savedscanname);
   end;
 
-  OutputDebugString('Config 3.1');
-  OutputDebugString('scanOption='+inttostr(integer(scanOption)));
+  //OutputDebugString('Config 3.1');
+ // OutputDebugString('scanOption='+inttostr(integer(scanOption)));
 
 
   if (scanOption in [soIncreasedValueBy, soDecreasedValueBy]) and (value=0) and (dvalue=0) then
     scanOption:=soUnchanged;
+
 
   case variableType of
     vtByte:
@@ -4355,7 +4628,10 @@ begin
 
       case scanOption of
         soForgot:           CheckRoutine:=Unknown;
-        soExactValue:       checkRoutine:=byteExact;
+        soExactValue:       if luaformula then
+                              CheckRoutine:=ByteLuaFormula
+                            else
+                              checkRoutine:=byteExact;
         soValueBetween:     if percentage then
                               checkroutine:=byteBetweenPercentage
                             else
@@ -4390,7 +4666,10 @@ begin
 
       case scanOption of
         soForgot:           CheckRoutine:=Unknown;
-        soExactValue:       checkRoutine:=wordExact;
+        soExactValue:       if luaformula then
+                              checkroutine:=WordLuaFormula
+                            else
+                              checkRoutine:=wordExact;
         soValueBetween:     if percentage then
                               checkroutine:=wordBetweenPercentage
                             else
@@ -4420,14 +4699,17 @@ begin
     vtDWord:
     begin
       //dword config
-      OutputDebugString('Config 4');
+      //OutputDebugString('Config 4');
 
       FoundBufferSize:=buffersize*4;
       StoreResultRoutine:=DWordSaveResult;
 
       case scanOption of
         soForgot:           CheckRoutine:=Unknown;
-        soExactValue:       checkRoutine:=dwordExact;
+        soExactValue:       if luaformula then
+                              checkroutine:=DWordLuaFormula
+                            else
+                              checkRoutine:=dwordExact;
         soValueBetween:     if percentage then
                               checkroutine:=dwordBetweenPercentage
                             else
@@ -4453,7 +4735,7 @@ begin
         soUnChanged:        checkroutine:=dwordUnchanged;
       end;
 
-      OutputDebugString('Config 5');
+      //OutputDebugString('Config 5');
     end;
 
     vtQWord:
@@ -4464,7 +4746,10 @@ begin
 
       case scanOption of
         soForgot:           CheckRoutine:=Unknown;
-        soExactValue:       checkRoutine:=qwordExact;
+        soExactValue:       if luaformula then
+                              checkRoutine:=QWordLuaFormula
+                            else
+                              checkRoutine:=qwordExact;
         soValueBetween:     if percentage then
                               checkroutine:=qwordBetweenPercentage
                             else
@@ -4499,7 +4784,10 @@ begin
 
       case scanOption of
         soForgot:           CheckRoutine:=Unknown;
-        soExactValue:       checkRoutine:=singleExact;
+        soExactValue:       if luaformula then
+                              checkroutine:=SingleLuaFormula
+                            else
+                              checkRoutine:=singleExact;
         soValueBetween:     if percentage then
                               checkroutine:=singleBetweenPercentage
                             else
@@ -4530,7 +4818,10 @@ begin
 
       case scanOption of
         soForgot:           CheckRoutine:=Unknown;
-        soExactValue:       checkRoutine:=doubleExact;
+        soExactValue:       if luaformula then
+                              checkRoutine:=DoubleLuaFormula
+                            else
+                              checkRoutine:=doubleExact;
         soValueBetween:     if percentage then
                               checkroutine:=DoubleBetweenPercentage
                             else
@@ -4623,7 +4914,10 @@ begin
       FlushRoutine:=allFlush;
       case scanOption of
         soForgot:           CheckRoutine:=allUnknown;
-        soExactValue:       checkRoutine:=allExact;
+        soExactValue:       if luaformula then
+                              checkRoutine:=AllLuaFormula
+                            else
+                              checkRoutine:=allExact;
         soValueBetween:     if percentage then
                               checkroutine:=allBetweenPercentage
                             else
@@ -4668,7 +4962,10 @@ begin
       begin
         case scanOption of
           soForgot:           CheckRoutine:=Unknown;
-          soExactValue:       checkRoutine:=customFloatExact;
+          soExactValue:       if luaformula then
+                                checkRoutine:=customFloatExact
+                              else
+                                checkRoutine:=customFloatExact;
           soValueBetween:     if percentage then
                                 checkroutine:=customFloatBetweenPercentage
                               else
@@ -4693,7 +4990,10 @@ begin
       begin
         case scanOption of
           soForgot:           CheckRoutine:=Unknown;
-          soExactValue:       checkRoutine:=customExact;
+          soExactValue:       if luaformula then
+                                checkRoutine:=CustomLuaFormula
+                              else
+                                checkRoutine:=customExact;
           soValueBetween:     if percentage then
                                 checkroutine:=customBetweenPercentage
                               else
@@ -4749,11 +5049,37 @@ begin
 
   end;
 
-  OutputDebugString('Config 6');
+ // OutputDebugString('Config 6');
   getmem(CurrentFoundBuffer,FoundBufferSize);
   getmem(SecondaryFoundBuffer,FoundBufferSize);
 
-  OutputDebugString('configurescanroutine: Normal exit');
+  //OutputDebugString('configurescanroutine: Normal exit');
+
+  if luaformula then
+  begin
+    l:=LuaVM;
+
+    i:=luaL_loadstring(L, pchar('return function(value,previousvalue) return ('+scanvalue1+') end')); //pushed this function on the lua stack which will be reused indefinitrelly
+    if i=0 then
+    begin
+      if lua_isfunction(L,-1)=false then
+        raise exception.create('Invalid formula ( '+Lua_ToString(L,-1)+' )');
+
+      if lua_pcall(L,0,1,0)<>0 then
+        raise exception.create('Invalid formula ( '+Lua_ToString(L,-1)+' )');
+
+      if lua_isfunction(L,-1)=false then
+        raise exception.create('Invalid formula ( '+Lua_ToString(L,-1)+' )');
+    end
+    else
+    begin
+      if i=LUA_ERRSYNTAX then
+        raise exception.create('Invalid formula Syntax Error: '+Lua_ToString(L,-1))
+      else
+        raise exception.create('Invalid formula Unknown '+Lua_ToString(L,-1))
+
+    end;
+  end;
 end;
 
 procedure TScanner.nextNextscan;
@@ -4998,7 +5324,7 @@ var i: integer;
     x: ptruint;
 
     currentbase: ptruint;
-    size: dword;
+    size, _size: dword;
     actualread: ptrUint;
     memorybuffer: ^byte;
     toread: dword;
@@ -5019,6 +5345,9 @@ begin
     begin
       //not unknown initial
       memorybuffer:=virtualAlloc(nil,maxregionsize+variablesize+16,MEM_COMMIT or MEM_RESERVE or MEM_TOP_DOWN	, PAGE_READWRITE);
+      //test:
+      //FillMemory(memorybuffer, maxregionsize+variablesize+16, $CE);
+
       configurescanroutine;
     end
     else //it is a unknown initial value
@@ -5070,9 +5399,17 @@ begin
         actualread:=0;
         //variablesize:=0;
         if size<toread then
-          ReadProcessMemory(phandle,pointer(currentbase),memorybuffer,size+variablesize-1,actualread)  //+variablesize for overlap, only when not unknown var
+          _size:=size+variablesize-1
         else
-          ReadProcessMemory(phandle,pointer(currentbase),memorybuffer,size,actualread);
+          _size:=size;
+
+        if (_size>buffersize) then _size:=buffersize;
+
+
+        ReadProcessMemory(phandle,pointer(currentbase),memorybuffer,_size,actualread);
+
+        //sanitize the results
+        if actualread>_size then actualread:=_size;
 
         if scanOption=soUnknownValue then
         begin
@@ -5106,7 +5443,10 @@ begin
         else
         begin
           //scan the buffer
+
+          lastpart:=1021;
           firstscanmem(currentbase,memorybuffer,actualread);
+          lastpart:=1022;
 
         end;
 
@@ -5114,6 +5454,8 @@ begin
         currentbase:=currentbase+size;
         
         inc(scanned,size); //for the progressbar
+
+
         dec(toread,size);
 
         if (OnlyOne and (found>0)) then exit;
@@ -5124,6 +5466,7 @@ begin
     lastpart:=103;
 
     if (scanOption<>soUnknownValue) then flushroutine; //save results
+    lastpart:=104;
   finally
     {$ifdef LOWMEMORYUSAGE}
     if previousmemoryfile<>nil then
@@ -5135,12 +5478,11 @@ begin
     if (scanOption<>soUnknownValue) and (memorybuffer<>nil) then
       virtualfree(memorybuffer,0,MEM_RELEASE);
     {$endif}
-
-
   end;
 end;
 
 procedure TScanner.execute;
+var i: integer;
 begin
   (*
   {$if defined(cpui386) or defined(cpux86_64)}
@@ -5167,10 +5509,20 @@ begin
     end;
 
     //tell scanwriter to stop
+    lastpart:=2;
     scanwriter.flush;
+    lastpart:=3;
 
     if scanwriter.writeError then
       raise exception.Create(Format(rsDiskWriteError, [scanwriter.errorString]));
+
+    if OnlyOne and (AddressFound<>0) then
+    begin
+      //tell siblings to go kill themselves. This one won the price
+      for i:=0 to length(OwningScanController.scanners)-1 do
+        OwningScanController.scanners[i].Terminate;
+    end;
+
   except
     on e: exception do
     begin
@@ -5178,6 +5530,12 @@ begin
       errorstring:=rsThread+inttostr(scannernr)+':'+e.message+' ('+inttostr(lastpart)+')';
 
       log('Scanner exception:'+errorstring);
+
+
+      {$if lcl_fullversion < 2000000}
+      DebugLn('Scanner exception:'+errorstring);
+      DumpExceptionBackTrace;
+      {$endif}
 
       //tell all siblings to terminate, something messed up
       //and I can just do this, since the ScanController is waiting for us, and terminate is pretty much atomic
@@ -5194,7 +5552,7 @@ end;
 destructor TScanner.destroy;
 begin
 
-  outputdebugstring('Destroying a scanner');
+  //outputdebugstring('Destroying a scanner');
 
   if groupdata<>nil then
     freeandnil(groupdata);
@@ -5203,13 +5561,13 @@ begin
   if AddressFile<>nil then //can be made nil by the scancontroller
   begin
     freeandnil(Addressfile);
-    DeleteFile(scandir+'ADDRESSES-'+inttostr(ThreadID)+'.TMP');
+    DeleteFile(scandir+'ADDRESSES-'+inttostr(ptruint(ThreadID))+'.TMP');
   end;
 
   if MemoryFile<>nil then
   begin
     freeandnil(MemoryFile);
-    DeleteFile(scandir+'MEMORY-'+inttostr(ThreadID)+'.TMP');
+    DeleteFile(scandir+'MEMORY-'+inttostr(ptruint(ThreadID))+'.TMP');
   end;
 
   if scanwriter<>nil then
@@ -5224,6 +5582,9 @@ begin
 
   if savedscanhandler<>nil then freeandnil(savedscanhandler);
 
+  if luaformula and (L<>nil) then
+    lua_pop(L, lua_gettop(L));
+
   inherited destroy;
 end;
 
@@ -5233,8 +5594,8 @@ begin
 
   self.scandir:=scandir;
 
-  AddressFilename:=scandir+'ADDRESSES-'+inttostr(ThreadID)+'.TMP';
-  MemoryFilename:=scandir+'MEMORY-'+inttostr(ThreadID)+'.TMP';
+  AddressFilename:=scandir+'ADDRESSES-'+inttostr(ptruint(ThreadID))+'.TMP';
+  MemoryFilename:=scandir+'MEMORY-'+inttostr(ptruint(ThreadID))+'.TMP';
   AddressFile:=TFileStream.Create(AddressFilename,fmCreate or fmSharedenynone);
   MemoryFile:=TFileStream.Create(MemoryFilename,fmCreate or fmSharedenynone);
 
@@ -5255,24 +5616,27 @@ end;
 //===============TScanController===============//
 
 procedure TScanController.updategui;
-var totaladdressestoscan, currentlyscanned, foundcount: qword;
+var
+  progress: integer;
+  totaladdressestoscan, currentlyscanned, foundcount: qword;
 begin
   //runs in mainthread
+  progress:=OwningMemScan.GetProgress(totaladdressestoscan,currentlyscanned, foundcount);
   if OwningMemScan.progressbar<>nil then
   begin
-    OwningMemScan.progressbar.Position:=OwningMemScan.GetProgress(totaladdressestoscan,currentlyscanned, foundcount);
+    OwningMemScan.progressbar.Position:=progress;
     {$ifdef windows}
     SetProgressValue(OwningMemScan.progressbar.Position, OwningMemScan.progressbar.Max);
     {$endif}
-
-    if assigned(owningmemscan.OnGuiUpdate) then
-      owningmemscan.OnGuiUpdate(OwningMemScan, totaladdressestoscan,currentlyscanned, foundcount);
   end;
+
+  if assigned(owningmemscan.OnGuiUpdate) then
+    owningmemscan.OnGuiUpdate(OwningMemScan, totaladdressestoscan,currentlyscanned, foundcount);
 end;
 
 procedure TScanController.errorpopup;
 begin
-  {$IFNDEF UNIX}
+  {$IFNDEF jni}
   messagedlg(errorstring,mtError,[mbok],0);
   {$ENDIF}
 end;
@@ -5322,7 +5686,7 @@ begin
 
     vtByteArray:
     begin
-      OutputDebugString('aobscan for '+scanvalue1);
+      //OutputDebugString('aobscan for '+scanvalue1);
 
       if scanoption<>soUnknownValue then
         variablesize:=getBytecountArrayOfByteString(scanvalue1)
@@ -5336,7 +5700,7 @@ begin
 
     vtByteArrays:
     begin
-      OutputDebugString('maobscan for '+scanvalue1);
+     // OutputDebugString('maobscan for '+scanvalue1);
       if scanoption<>soUnknownValue then
       begin
         //find the max size of the aob's
@@ -5426,11 +5790,11 @@ begin
   end;
 
 
-  OutputDebugString('fillVariableAndFastScanAlignSize:');
+ // OutputDebugString('fillVariableAndFastScanAlignSize:');
 
-  OutputDebugString(format('variableType=%d',[integer(variableType)]));
-  OutputDebugString(format('variablesize=%d',[variablesize]));
-  OutputDebugString(format('fastscanalignsize=%d',[fastscanalignsize]));
+ // OutputDebugString(format('variableType=%d',[integer(variableType)]));
+ // OutputDebugString(format('variablesize=%d',[variablesize]));
+ // OutputDebugString(format('fastscanalignsize=%d',[fastscanalignsize]));
 end;
 
 
@@ -5455,6 +5819,9 @@ begin
   else
   {$ENDIF}
     threadcount:=GetCPUCount;
+
+  if luaformula then
+    threadcount:=1;
 
   
   //read the results and split up
@@ -5542,6 +5909,7 @@ begin
           scanners[i].useNextNextscan:=true; //address result scan so nextnextscan
           scanners[i].floatscanWithoutExponents:=floatscanWithoutExponents;
           scanners[i].inverseScan:=inverseScan;
+          scanners[i].luaformula:=luaformula;
 
           if variableType=vtGrouped then
             scanners[i].PreviousOffsetCount:=offsetcount;
@@ -5579,7 +5947,7 @@ begin
          {$ifdef windows}
          WaitForSingleObject(scanners[i].Handle,25); //25ms, an eternity for a cpu
          {$endif}
-         if OwningMemScan.progressbar<>nil then
+         if (OwningMemScan.progressbar<>nil) or (assigned(owningmemscan.OnGuiUpdate)) then
            synchronize(updategui);
         end;
 
@@ -5600,7 +5968,7 @@ begin
         inc(OwningMemScan.found,scanners[i].totalfound);
       end;
 
-      if OwningMemScan.progressbar<>nil then
+      if (OwningMemScan.progressbar<>nil) or (assigned(owningmemscan.OnGuiUpdate)) then
         synchronize(updategui);
         
       if haserror then
@@ -5640,6 +6008,10 @@ begin
   if (variableType=vtCustom) and (customType<>nil) and (customtype.CustomTypeType=cttLuaScript) then
     threadcount:=1;
   {$ENDIF}
+
+  if luaformula then
+    threadcount:=1;
+
 
   totalProcessMemorySize:=0;
 
@@ -5778,6 +6150,7 @@ begin
       scanners[i].useNextNextscan:=false; //region scan so firstnextscan
       scanners[i].floatscanWithoutExponents:=floatscanWithoutExponents;
       scanners[i].inverseScan:=inverseScan;
+      scanners[i].luaformula:=luaformula;
 
       if i=0 then //first thread gets the header part
       begin
@@ -5806,7 +6179,7 @@ begin
     begin
     {$IFDEF WINDOWS}
       WaitForSingleObject(scanners[i].Handle,25); //25ms, an eternity for a cpu
-      if OwningMemScan.progressbar<>nil then
+      if (OwningMemScan.progressbar<>nil) or (assigned(owningmemscan.OnGuiUpdate))  then
         synchronize(updategui);
     {$else}
       sleep(25);
@@ -5832,7 +6205,7 @@ begin
     inc(OwningMemScan.found,scanners[i].totalfound);
   end;
 
-  if OwningMemScan.progressbar<>nil then
+  if (OwningMemScan.progressbar<>nil) or (assigned(owningmemscan.OnGuiUpdate)) then
     synchronize(updategui);
     
   if haserror then
@@ -5882,7 +6255,7 @@ var
   leftfromprevious: dword;
   offsetincurrentregion: qword;
 
-  isWritable, isExecutable, isCopyOnWrite: boolean;
+  isWritable, isExecutable, isCopyOnWrite{$ifdef darwin}, isDirty{$endif}: boolean;
 
   validRegion: boolean;
 
@@ -5891,9 +6264,11 @@ var
   f: TFilestream;
 
   vqecacheflag: dword;
+
+  starta,startb, stopa,stopb: ptruint;
 begin
-  OutputDebugString('TScanController.firstScan');
-  if OnlyOne then
+ // OutputDebugString('TScanController.firstScan');
+  if OnlyOne or luaformula then
     threadcount:=1
   else
     threadcount:=GetCPUCount;
@@ -5903,11 +6278,11 @@ begin
   if (variableType=vtCustom) and (customType<>nil) and (customtype.CustomTypeType=cttLuaScript) then
     threadcount:=1;
   {$ENDIF}
-    
+
   totalProcessMemorySize:=0;
 
 
-  OutputDebugString(format('threadcount=%d',[threadcount]));
+  //OutputDebugString(format('threadcount=%d',[threadcount]));
   {
   ScanController plan:
   spawn idle scanner threads , ammount=maxthreadcount in settings
@@ -5941,34 +6316,39 @@ begin
      startaddress:=startaddress-(startaddress mod 8);
   end;
 
-  OutputDebugString('processhandle='+inttostr(processhandle));
-  OutputDebugString(format('startaddress=%x',[startaddress]));
-  OutputDebugString(format('stopaddress=%x',[stopaddress]));
+ // OutputDebugString('processhandle='+inttostr(processhandle));
+ // OutputDebugString(format('startaddress=%x',[startaddress]));
+ // OutputDebugString(format('stopaddress=%x',[stopaddress]));
 
-  OutputDebugString('Finding out memory size');
+ // OutputDebugString('Finding out memory size');
   currentBaseAddress:=startaddress;
   ZeroMemory(@mbi,sizeof(mbi));
 
-  OutputDebugString('scanWritable='+inttostr(integer(scanWritable)));
-  OutputDebugString('scanExecutable='+inttostr(integer(scanExecutable)));
-  OutputDebugString('scanCopyOnWrite='+inttostr(integer(scanCopyOnWrite)));
+ // OutputDebugString('scanWritable='+inttostr(integer(scanWritable)));
+ // OutputDebugString('scanExecutable='+inttostr(integer(scanExecutable)));
+ // OutputDebugString('scanCopyOnWrite='+inttostr(integer(scanCopyOnWrite)));
 
 
   vqecacheflag:=0;
 
   if not Scan_MEM_MAPPED then
-    vqecacheflag:=vqecacheflag or VQE_NOSHARED;
+    vqecacheflag:=vqecacheflag or VQE_NOSHARED;   //4
 
   if scan_pagedonly then
-    vqecacheflag:=vqecacheflag or VQE_PAGEDONLY;
+    vqecacheflag:=vqecacheflag or VQE_PAGEDONLY;   //1
 
   if scan_dirtyonly and (scanWritable=scanInclude) then
-    vqecacheflag:=vqecacheflag or VQE_DIRTYONLY;
+    vqecacheflag:=vqecacheflag or VQE_DIRTYONLY;  //2
 
+  {$ifndef darwin}
   VirtualQueryEx_StartCache(processhandle, vqecacheflag);
+  {$endif}
 
   while (Virtualqueryex(processhandle,pointer(currentBaseAddress),mbi,sizeof(mbi))<>0) and (currentBaseAddress<stopaddress) and ((currentBaseAddress+mbi.RegionSize)>currentBaseAddress) do   //last check is done to see if it wasn't a 64-bit overflow.
   begin
+  //  OutputDebugString(format('R=%x-%x',[ptruint(mbi.BaseAddress), ptruint(mbi.BaseAddress)+mbi.RegionSize]));
+
+
    // if (not (not scan_mem_private and (mbi._type=mem_private))) and (not (not scan_mem_image and (mbi._type=mem_image))) and (not (not scan_mem_mapped and (mbi._type=mem_mapped))) and (mbi.State=mem_commit) and ((mbi.Protect and page_guard)=0) and ((mbi.protect and page_noaccess)=0) then  //look if it is commited
     begin
       if PtrUint(mbi.BaseAddress)<startaddress then
@@ -5988,11 +6368,15 @@ begin
       validRegion:=validRegion and (not (not scan_mem_private and (mbi._type=mem_private)));
       validRegion:=validregion and (not (not scan_mem_image and (mbi._type=mem_image)));
       validRegion:=validregion and (not (not scan_mem_mapped and (mbi._type=mem_mapped)));
+      validRegion:=validregion and (not (Skip_PAGE_NOCACHE and ((mbi._type and PAGE_NOCACHE)>0)));
+      validRegion:=validregion and (not (Skip_PAGE_WRITECOMBINE and ((mbi._type and PAGE_WRITECOMBINE)>0)));
 
 
+      {$ifdef windows}
 
       if usedbkquery and DBKLoaded then //small patch to fix an issue with the driver where it somehow sees a really big memory block
         validRegion:=validRegion and (mbi.RegionSize<qword($2ffffffff));
+      {$endif}
 
       if validregion then
       begin
@@ -6012,6 +6396,10 @@ begin
         isCopyOnWrite:=((mbi.protect and PAGE_WRITECOPY)>0) or
                        ((mbi.protect and PAGE_EXECUTE_WRITECOPY)>0);
 
+        {$ifdef darwin}
+        isdirty:=(mbi.protect and PAGE_DIRTY)>0;
+        {$endif}
+
 
 
         case scanWritable of
@@ -6028,30 +6416,29 @@ begin
           scanInclude: validregion:=validregion and isCopyOnWrite;
           scanExclude: validregion:=validregion and (not isCopyOnWrite);
         end;
+
+        {$ifdef darwin}
+        case scanDirty of
+          scanInclude: validregion:=validregion and isDirty;
+          scanExclude: validregion:=validregion and (not isDirty);
+        end;
+        {$endif}
       end;
 
       if not validregion then
       begin
         //next
         currentBaseAddress:=PtrUint(mbi.BaseAddress)+mbi.RegionSize;
+
         continue;
       end;
 
 
       //still here, so valid
-      try
-        if memRegionPos>0 then
-        begin
-          //check if it can be appended to the previous region
-          if memRegion[memRegionPos-1].BaseAddress+memRegion[memRegionPos].MemorySize=PtrUint(mbi.baseaddress) then //yes, append
-          begin
-            //yes, so append
-            memRegion[memRegionPos-1].MemorySize:=memRegion[memRegionPos-1].MemorySize+mbi.RegionSize;
-            continue;              
-          end;
-        end;
 
-        //still here, so a new region
+     { if (memRegionPos=0) or (memRegion[memRegionPos-1].BaseAddress+memRegion[memRegionPos-1].MemorySize<>PtrUint(mbi.baseaddress)) then
+      begin}
+        //new region
         memRegion[memRegionPos].BaseAddress:=PtrUint(mbi.baseaddress);  //just remember this location
         memRegion[memRegionPos].MemorySize:=mbi.RegionSize;
         memRegion[memRegionPos].startaddress:=pointer(ptrUint(totalProcessMemorySize)); //starts from 0, for unknown scans
@@ -6059,26 +6446,49 @@ begin
         inc(memRegionPos);
         if (memRegionPos mod 16)=0 then //add another 16 to it
           setlength(memRegion,length(memRegion)+16);
+     { end
+      else
+      begin
+        //append
+        memRegion[memRegionPos-1].MemorySize:=memRegion[memRegionPos-1].MemorySize+mbi.RegionSize;
+      end; }
 
-      finally
-        inc(totalProcessMemorySize,mbi.RegionSize); //add this size to the total
+      inc(totalProcessMemorySize,mbi.RegionSize); //add this size to the total
 
-      end;
+
     end;
 
 
     currentBaseAddress:=PtrUint(mbi.baseaddress)+mbi.RegionSize;
+
   end;
 
+  {$ifndef darwin}
   VirtualQueryEx_EndCache(processhandle);
-
+  {$endif}
+    {
   OutputDebugString(format('memRegionPos=%d',[memRegionPos]));
   for i:=0 to memRegionPos-1 do
-    OutputDebugString(format('i: %d B=%x S=%x SA=%p',[i, memRegion[i].BaseAddress, memRegion[i].MemorySize, memRegion[i].startaddress]));
+  BEGIN
+    OutputDebugString(format('i: %d R=%x-%x S=%x SA=%p',[i, memRegion[i].BaseAddress, memRegion[i].BaseAddress+memRegion[i].MemorySize, memRegion[i].MemorySize, memRegion[i].startaddress]));
 
-  OutputDebugString(format('totalProcessMemorySize=%x (%d)',[totalProcessMemorySize, totalProcessMemorySize]));
+    for j:=0 to memregionpos-1 do
+    begin
+      if i<>j then
+      begin
+        starta:=memRegion[i].BaseAddress;
+        startb:=memRegion[j].BaseAddress;
+        stopa:=memregion[i].BaseAddress+memregion[i].MemorySize;
+        stopb:=memregion[j].BaseAddress+memregion[j].MemorySize;
 
-
+        if ((starta < stopb) and (startb < stopa)) then
+        begin
+          OutputDebugString('  : overlaps with '+inttostr(j));
+        end;
+      end;
+    end;
+  end;
+        }
 
   totalAddresses:=totalProcessMemorySize;
 
@@ -6088,7 +6498,7 @@ begin
   //if soUnknown, make a buffer where it can store all the 'previous' memory
   if scanOption=soUnknownValue then
   begin
-    OutputDebugString('scanOption=soUnknownValue');
+   // OutputDebugString('scanOption=soUnknownValue');
 
     {$ifdef lowmemoryusage}
     //create a file to store the previous memory in
@@ -6101,12 +6511,12 @@ begin
     //extra check to make sure the previous scan was cleared
     if OwningMemScan.previousMemoryBuffer<>nil then virtualfree(OwningMemScan.previousMemoryBuffer,0,MEM_RELEASE);
 
-    OutputDebugString(format('Allocating %dKB for previousMemoryBuffer',[totalProcessMemorySize div 1024]));
+    //OutputDebugString(format('Allocating %dKB for previousMemoryBuffer',[totalProcessMemorySize div 1024]));
     OwningMemScan.previousMemoryBuffer:=VirtualAlloc(nil,totalProcessMemorySize, MEM_COMMIT or MEM_RESERVE or MEM_TOP_DOWN, PAGE_READWRITE); //top down to try to prevent memory fragmentation
     if OwningMemScan.previousMemoryBuffer=nil then
       raise exception.Create(Format(rsFailureAllocatingMemoryForCopyTriedAllocatingKB, [inttostr(totalProcessMemorySize div 1024)]));
 
-    OutputDebugString(format('Allocated at %p',[OwningMemScan.previousMemoryBuffer]));
+  //  OutputDebugString(format('Allocated at %p',[OwningMemScan.previousMemoryBuffer]));
     {$endif}
 
 
@@ -6118,14 +6528,14 @@ begin
   if totalProcessMemorySize<threadcount*4096 then
     threadcount:=1+(totalProcessMemorySize div 4096); //in case of mini scans don't wate too much time creating threads
 
-  OutputDebugString(format('Splitting up the workload between %d threads',[threadcount]));
+  //OutputDebugString(format('Splitting up the workload between %d threads',[threadcount]));
 
 
   Blocksize:=totalProcessMemorySize div threadcount;
   if (Blocksize mod 4096) > 0 then
     Blocksize:=blocksize-(blocksize mod 4096); //lastblock gets the missing bytes
 
-  OutputDebugString(format('Blocksize = %x',[Blocksize]));
+  //OutputDebugString(format('Blocksize = %x',[Blocksize]));
 
 
 
@@ -6138,7 +6548,7 @@ begin
 
     for i:=0 to threadcount-1 do
     begin
-      OutputDebugString(format('Creating scanner %d',[i]));
+    //  OutputDebugString(format('Creating scanner %d',[i]));
       scanners[i]:=tscanner.Create(true, OwningMemScan.ScanresultFolder);
       scanners[i].scannernr:=i;
       scanners[i].OwningScanController:=self;
@@ -6204,21 +6614,21 @@ begin
 
 
       end;
-      OutputDebugString(format('startregion = %d',[scanners[i]._startregion]));
-      OutputDebugString(format('stopregion = %d',[scanners[i]._stopregion]));
-      OutputDebugString(format('startaddress = %x',[scanners[i].startaddress]));
-      OutputDebugString(format('stopaddress = %x',[scanners[i].stopaddress]));
+    //  OutputDebugString(format('startregion = %d',[scanners[i]._startregion]));
+    //  OutputDebugString(format('stopregion = %d',[scanners[i]._stopregion]));
+    //  OutputDebugString(format('startaddress = %x',[scanners[i].startaddress]));
+    //  OutputDebugString(format('stopaddress = %x',[scanners[i].stopaddress]));
 
-      OutputDebugString(format('j = %d',[j]));
-      OutputDebugString(format('leftfromprevious = %x',[leftfromprevious]));
-      OutputDebugString(format('offsetincurrentregion = %x',[offsetincurrentregion]));
+    //  OutputDebugString(format('j = %d',[j]));
+    //  OutputDebugString(format('leftfromprevious = %x',[leftfromprevious]));
+    //  OutputDebugString(format('offsetincurrentregion = %x',[offsetincurrentregion]));
 
 
 
       if scanners[i].maxregionsize>buffersize then
         scanners[i].maxregionsize:=buffersize;
 
-      OutputDebugString(format('maxregionsize = %x',[scanners[i].maxregionsize]));
+   //   OutputDebug String(format('maxregionsize = %x',[scanners[i].maxregionsize]));
               
 
       //now configure the scanner thread with the same info this thread got, with some extra info
@@ -6232,7 +6642,7 @@ begin
       scanners[i].scanValue1:=scanvalue1; //usual scanvalue
       scanners[i].scanValue2:=scanValue2; //2nd value for between scan
       scanners[i].unicode:=unicode;
-      scanners[i].OnlyOne:=OnlyOne;
+      scanners[i].OnlyOne:=OnlyOne or isUnique;
       scanners[i].caseSensitive:=caseSensitive;
       scanners[i].percentage:=percentage;
       scanners[i].hexadecimal:=hexadecimal;
@@ -6244,6 +6654,8 @@ begin
       scanners[i].variablesize:=variablesize;
       scanners[i].floatscanWithoutExponents:=floatscanWithoutExponents;
       scanners[i].inverseScan:=inverseScan;
+      scanners[i].luaformula:=luaformula;
+
 
 
       if i=0 then //first thread gets the header part
@@ -6279,7 +6691,8 @@ begin
       begin
 {$ifdef windows}
         WaitForSingleObject(scanners[i].Handle,25); //25ms, an eternity for a cpu
-        if OwningMemScan.progressbar<>nil then
+
+        if (OwningMemScan.progressbar<>nil) or (assigned(owningmemscan.OnGuiUpdate)) then
           synchronize(updategui);
 {$else}
         sleep(25)
@@ -6303,8 +6716,16 @@ begin
         errorstring:=scanners[i].errorstring;
         break;
       end;
+
       inc(OwningMemScan.found,scanners[i].totalfound);
+
+      if IsUnique and (scanners[i].AddressFound<>0) then
+      begin
+        FoundSomething:=true;
+        AddressFound:=scanners[i].AddressFound;
+      end;
     end;
+
 
     if OnlyOne then
     begin
@@ -6318,10 +6739,10 @@ begin
       setlength(AddressesFound, length(scanners[0].mabs));
       for j:=0 to length(scanners[0].mabs)-1 do
         AddressesFound[j]:=scanners[0].mabs[j].foundaddress;
-
     end;
 
-    if OwningMemScan.progressbar<>nil then
+
+    if (OwningMemScan.progressbar<>nil) or (assigned(owningmemscan.OnGuiUpdate)) then
       synchronize(updategui);
       
     if haserror then
@@ -6389,7 +6810,7 @@ begin
     end;
     
   finally
-    OutputDebugString('Scan ended');
+   // OutputDebugString('Scan ended');
   end;
 
 
@@ -6406,7 +6827,7 @@ var err: dword;
     haserror2: boolean;
     datatype: string[6];
 begin
-  OutputDebugString('TScanController.execute');
+ // OutputDebugString('TScanController.execute');
 
   try
 
@@ -6420,7 +6841,7 @@ begin
       fillVariableAndFastScanAlignSize;
       if scantype=stFirstScan then firstscan;
       if scantype=stNextScan then nextscan;
-      OutputDebugString('No exception on controller');
+     // OutputDebugString('No exception on controller');
     except
       on e: exception do
       begin
@@ -6433,7 +6854,7 @@ begin
 
 
 
-    if OnlyOne then savescannerresults:=false; //DO NOT INTERFERE
+    if OnlyOne or isUnique then savescannerresults:=false; //DO NOT INTERFERE
 
 
     {$ifdef LOWMEMORYUSAGE}
@@ -6465,7 +6886,7 @@ begin
     if savescannerresults then //prepare saving. Set the filesize
     begin
       try
-        OutputDebugString('ScanController: creating undo files');
+      //  OutputDebugString('ScanController: creating undo files');
         if scanners[0].Addressfile<>nil then
           freeandnil(scanners[0].Addressfile);
 
@@ -6516,8 +6937,8 @@ begin
 
 
 
-        outputdebugstring(format('ScanController: Have set AddressFile.size to %d',[AddressFile.size]));
-        outputdebugstring(format('ScanController: Have set MemoryFile.size to %d',[memoryFile.size]));
+       // outputdebugstring(format('ScanController: Have set AddressFile.size to %d',[AddressFile.size]));
+       // outputdebugstring(format('ScanController: Have set MemoryFile.size to %d',[memoryFile.size]));
       except
         on e: exception do
         begin
@@ -6536,7 +6957,13 @@ begin
     isdone:=true;
 
     //todo: notify the caller the scan is done
-    OutputDebugString('It actually finished');
+  //  OutputDebugString('It actually finished');
+
+    owningmemscan.postScanState:=psJustFinished;
+
+    {$ifdef windows}
+    SetProgressState(tbpsNone);
+    {$endif}
 
     isdoneevent.setevent;
 
@@ -6551,6 +6978,8 @@ begin
       try
         if savescannerresults and (addressfile<>nil) then //now actually save the scanner results
         begin
+          owningmemscan.postScanState:=psOptimizingScanResults;
+
           //AddressFile should already have been created with the correct datatype and opened as denynone
           AddressFile.Seek(oldpos,soFromBeginning);
           Memoryfile.seek(oldmempos,soFromBeginning);
@@ -6558,7 +6987,7 @@ begin
           //save the exact results, and copy it to the AddressesFirst.tmp and Memoryfirst.tmp files
           for i:=1 to length(scanners)-1 do
           begin
-            outputdebugstring(format('ScanController: Writing results from scanner %d',[i]));
+        //    outputdebugstring(format('ScanController: Writing results from scanner %d',[i]));
             if (scanners[i].Addressfile<>nil) and (scanners[i].MemoryFile<>nil) then
             begin
               addressfile.CopyFrom(scanners[i].Addressfile,0);
@@ -6576,27 +7005,30 @@ begin
       end;
     end;
 
+
+
     isreallydoneevent.setEvent;
 
 
-
-
     //clean up secondary scanner threads, their destructor will close and delete their files
-    outputdebugstring('ScanController: Destroying scanner threads');
+   // outputdebugstring('ScanController: Destroying scanner threads');
 
     scannersCS.enter;
+    owningmemscan.postScanState:=psTerminatingThreads;
+
     try
-      outputdebugstring('ScanController: Critical section "scannersCS" aquired');
+
+     // outputdebugstring('ScanController: Critical section "scannersCS" aquired');
       for i:=0 to length(scanners)-1 do
       begin
-        outputdebugstring(format('ScanController: Freeing scanner %d',[i]));
+       // outputdebugstring(format('ScanController: Freeing scanner %d',[i]));
         freeandnil(scanners[i]);
       end;
 
       setlength(scanners,0);
     finally
       scannersCS.leave;
-      outputdebugstring('ScanController: Critical section "scannersCS" released');
+     // outputdebugstring('ScanController: Critical section "scannersCS" released');
     end;
 
 
@@ -6610,10 +7042,12 @@ begin
       if scantype=stFirstScan then
       begin
 
-        if not OnlyOne then
+        if not (OnlyOne or isUnique) then
         begin
-          outputdebugstring('ScanController: This was a first scan, so saving the First Scan results');
-          outputdebugstring('to:'+OwningMemScan.ScanresultFolder+'ADDRESSES.First');
+          owningmemscan.postScanState:=psSavingFirstScanResults;
+
+        //  outputdebugstring('ScanController: This was a first scan, so saving the First Scan results');
+         // outputdebugstring('to:'+OwningMemScan.ScanresultFolder+'ADDRESSES.First');
 
           {$IFDEF LOWMEMORYUSAGE}
           copyfile(OwningMemScan.ScanresultFolder+'ADDRESSES.TMP', OwningMemScan.ScanresultFolder+'ADDRESSES.First');
@@ -6621,9 +7055,9 @@ begin
           {$else}
           OwningMemScan.SaveFirstScanThread:=TSaveFirstScanThread.create(OwningMemScan.ScanresultFolder, false,@OwningMemScan.memregion,@OwningMemScan.memregionpos, OwningMemScan.previousMemoryBuffer);
           {$ENDIF}
-        end
-        else
-          OutputDebugString('This was an single result scan only. No need to save the first scan state');
+        end;
+        //else
+        //  OutputDebugString('This was an single result scan only. No need to save the first scan state');
       end;
     except
       on e: exception do
@@ -6642,19 +7076,26 @@ begin
     end;
   end;
 
-  {$IFNDEF UNIX}
+  owningmemscan.postScanState:=psShouldBeFinished;
+
+
+  {$IFNDEF jni}
   if haserror2 then
     MessageBox(0, pchar(errorstring),'Scancontroller cleanup error',  MB_ICONERROR or mb_ok);
   {$ENDIF}
 
-  outputdebugstring('end of scancontroller reached');
+  //outputdebugstring('end of scancontroller reached');
   isreallydoneevent.setEvent;   //just set it again if it wasn't set
 
-  {$IFNDEF UNIX}
+
+
+
+
+  {$IFNDEF jni}
   if assigned(OwningMemScan.OnScanDone) then
   {$endif}
   begin
-    outputdebugstring('Queue OwningMemScan.ScanDone');
+   // outputdebugstring('Queue OwningMemScan.ScanDone');
     Queue(OwningMemScan.ScanDone);
   end;
 end;
@@ -6705,17 +7146,21 @@ var AddressFile: TFilestream;
     datatype: string[6];
 begin
   //open the address file and determine if it's a region scan or result scan
-  try
-    AddressFile:=TFileStream.Create(ScanresultFolder+'ADDRESSES.TMP',fmOpenRead or fmSharedenynone);
+  result:=false;
+  if fileexists(ScanresultFolder+'ADDRESSES.TMP') then
+  begin
     try
-      Addressfile.ReadBuffer(datatype,sizeof(datatype));
-    finally
-      addressFile.free;
-    end;
+      AddressFile:=TFileStream.Create(ScanresultFolder+'ADDRESSES.TMP',fmOpenRead or fmSharedenynone);
+      try
+        Addressfile.ReadBuffer(datatype,sizeof(datatype));
+      finally
+        addressFile.free;
+      end;
 
-    result:=datatype='REGION';
-  except
-    result:=false;
+      result:=datatype='REGION';
+    except
+      result:=false;
+    end;
   end;
 end;
 
@@ -6757,8 +7202,13 @@ begin
 
       if lastwait=wrTimeout then
       begin
-        {$IFNDEF UNIX}
+        {$IFNDEF jni}
+        {$ifdef windows}
         TerminateThread(scancontroller.Handle, $dead);
+        {$endif}
+        {$ifdef darwin}
+        KillThread(scancontroller.handle);
+        {$endif}
         messagedlg(rsMSTheScanWasForcedToTerminateSubsequentScansMayNotFunctionProperlyEtc, mtWarning, [mbok], 0);
         {$else}
         KillThread(scancontroller.handle);
@@ -6860,7 +7310,7 @@ end;
 
 procedure TMemscan.undoLastScan;
 begin
-  {$IFNDEF UNIX}
+  {$IFNDEF jni}
   if attachedFoundlist<>nil then
     TFoundList(Attachedfoundlist).Deinitialize;
   {$ENDIF}
@@ -7026,7 +7476,7 @@ end;
 function TMemscan.Getbinarysize: int64;
 var i: integer;
 begin
-  case self.currentVariableType of
+  case fVariableType of
     vtByte:      result:=8;
     vtWord:      result:=16;
     vtDWord:     result:=32;
@@ -7050,7 +7500,7 @@ begin
     vtBinary:    result:=binaryLength;
     vtByteArray: result:=arrayLength*8;
     {$ifdef customtypeimplemented}
-    vtCustom:    result:=currentCustomType.bytesize*8;
+    vtCustom:    result:=customtype.bytesize*8;
     {$ENDIF}
     else result:=8;
   end;
@@ -7058,8 +7508,8 @@ end;
 
 procedure TMemscan.newscan;
 begin
-  OutputDebugString('TMemscan.newscan');
-  {$IFNDEF UNIX}
+  //OutputDebugString('TMemscan.newscan');
+  {$IFNDEF JNI}
   if attachedFoundlist<>nil then
     TFoundList(Attachedfoundlist).Deinitialize;
   {$ENDIF}
@@ -7089,116 +7539,198 @@ begin
   createscanfolder;
 
   fnextscanCount:=0;
-end;
 
-procedure TMemscan.NextScan(scanOption: TScanOption; roundingtype: TRoundingType; scanvalue1, scanvalue2: string; hexadecimal,binaryStringAsDecimal, unicode, casesensitive,percentage,compareToSavedScan: boolean; savedscanname: string);
-begin
-  fisHexadecimal:=hexadecimal;
-
-  {$IFNDEF UNIX}
-  if attachedFoundlist<>nil then
-    TFoundList(Attachedfoundlist).Deinitialize;
-  {$ENDIF}
-
-
-  inc(fnextscanCount);
-
-
-  if scanController<>nil then
-  begin
-    {$ifdef windows}
-    if GUIScanner and (WaitForSingleObject(scancontroller.handle, 500)<>WAIT_OBJECT_0) then
-    begin
-      if frmBusy=nil then
-      begin
-
-        frmBusy:=TfrmBusy.create(nil);
-        frmBusy.WaitForHandle:=scancontroller.handle;
-        frmBusy.Showmodal;
-      end;
-
-    end;
-    {$endif}
-
-    scancontroller.WaitFor; //could be it's still saving the results of the previous scan
-    freeandnil(scanController);
-  end;
-
-  {$IFNDEF LOWMEMORYUSAGE}
-  if SaveFirstScanThread<>nil then
-  begin
-    if GUIScanner and (WaitForSingleObject(SaveFirstScanThread.handle, 500)<>WAIT_OBJECT_0) then
-    begin
-      if frmBusy=nil then
-      begin
-        frmBusy:=TfrmBusy.create(nil);
-        frmBusy.WaitForHandle:=SaveFirstScanThread.handle;
-        frmBusy.Showmodal;
-      end;
-
-    end;
-
-    SaveFirstScanThread.WaitFor; //wait till it's done
-    freeandnil(SaveFirstScanThread);
-  end;
-  {$ENDIF}
-
-  scanController:=TscanController.Create(true);
-  scanController.OwningMemScan:=self;
-  scanController.scantype:=stNextScan;
-  scanController.scanOption:=scanOption;
-
-  scanController.compareToSavedScan:=compareToSavedScan;
-  scanController.savedscanname:=savedscanname;
-  scanController.variableType:=CurrentVariableType;
-  scancontroller.customType:=customtype;
-
-
-  scanController.roundingtype:=roundingtype;
-
-  scanController.fastscanalignment:=fastscanalignment;
-  scanController.fastscanmethod:=fastscanmethod;
-  scancontroller.fastscandigitcount:=fastscandigitcount;
-
-  if codepage then
-  begin
-    scanvalue1:=UTF8ToWinCP(scanvalue1);
-    scanValue2:=UTF8ToWinCP(scanvalue1);
-  end;
-
-  scanController.scanValue1:=scanvalue1; //usual scanvalue
-  scanController.scanValue2:=scanValue2; //2nd value for between scan
-  scanController.startaddress:=self.startaddress;
-  scanController.stopaddress:=self.stopaddress;
-
-  scancontroller.hexadecimal:=hexadecimal;
-  scancontroller.binaryStringAsDecimal:=binaryStringAsDecimal;
-  scancontroller.unicode:=unicode;
-  scancontroller.casesensitive:=casesensitive;
-  scancontroller.floatscanWithoutExponents:=floatscanWithoutExponents;
-  scancontroller.inverseScan:=inverseScan;
-  scancontroller.percentage:=percentage;
-
-  fLastscantype:=stNextScan;
-  fLastScanValue:=scanvalue1;
-
-  scanController.start;
+  //scan params
+  fScanOption:=soExactValue;
+  fpercentage:=false;
+  fcompareToSavedScan:=false;
+  fsavedscanname:='';
 
 end;
 
-procedure TMemscan.firstscan(scanOption: TScanOption; VariableType: TVariableType; roundingtype: TRoundingType; scanvalue1, scanvalue2: string; startaddress,stopaddress: ptruint; hexadecimal,binaryStringAsDecimal,unicode,casesensitive: boolean; fastscanmethod: TFastScanMethod=fsmNotAligned; fastscanparameter: string=''; customtype: TCustomType=nil);
-{
-Spawn the controller thread and fill it with the required data
-Popup the wait window, or not ?
-}
-begin
-  fisHexadecimal:=hexadecimal;
+procedure TMemscan.NextScan(_scanOption: TScanOption; _roundingtype: TRoundingType; _scanvalue1, _scanvalue2: string; _hexadecimal,_binaryStringAsDecimal, _unicode, _casesensitive,_percentage,_compareToSavedScan: boolean; _savedscanname: string);
 
+begin
+  self.Hexadecimal:=_hexadecimal;
+  self.scanOption:=_scanOption;
+  self.roundingtype:=_roundingtype;
+  self.Scanvalue1:=_scanvalue1;
+  self.ScanValue2:=_scanvalue2;
+  self.Hexadecimal:=_hexadecimal;
+  self.BinaryStringAsDecimal:=_binaryStringAsDecimal;
+  self.unicode:=_unicode;
+  self.Casesensitive:=_casesensitive;
+  self.Percentage:=_percentage;
+  self.compareToSavedScan:=_compareToSavedScan;
+  self.savedScanName:=_savedscanname;
+  nextscan;
+end;
+
+procedure TMemscan.NextScan;
+var
+  {$ifdef windows}
+  frmBusy: TfrmBusy;
+  {$endif}
+  r: TModalResult;
+begin
+  {$IFNDEF jni}
+   if attachedFoundlist<>nil then
+     TFoundList(Attachedfoundlist).Deinitialize;
+   {$ENDIF}
+
+
+   inc(fnextscanCount);
+
+
+   if scanController<>nil then
+   begin
+     {$ifdef windows}
+
+     if GUIScanner and (WaitForSingleObject(scancontroller.handle, 500)<>WAIT_OBJECT_0) then
+     begin
+       frmBusy:=TfrmBusy.create(nil);
+       frmBusy.WaitForHandle:=scancontroller.handle;
+       frmBusy.memscan:=self;
+       frmBusy.Reason:=postScanState;
+
+       if busyformIsModal then
+         r:=frmBusy.Showmodal
+       else
+       begin
+         frmBusy.FormStyle:=fsStayOnTop;
+         frmBusy.Show;
+
+         while frmbusy.visible do
+         begin
+           Application.ProcessMessages;
+           CheckSynchronize(10);
+         end;
+       end;
+
+       frmBusy.free;
+     end;
+
+     {$endif}
+
+     scancontroller.WaitFor; //could be it's still saving the results of the previous scan
+     freeandnil(scanController);
+   end;
+
+   {$IFNDEF LOWMEMORYUSAGE}
+   if SaveFirstScanThread<>nil then
+   begin
+     {$ifdef windows}
+     if GUIScanner and (WaitForSingleObject(SaveFirstScanThread.handle, 500)<>WAIT_OBJECT_0) then
+     begin
+       postscanstate:=psSavingFirstScanResults2;
+       frmBusy:=TfrmBusy.create(nil);
+       frmBusy.WaitForHandle:=SaveFirstScanThread.handle;
+       frmBusy.memscan:=self;
+       frmBusy.Reason:=postScanState;
+
+       if busyformIsModal then
+         r:=frmBusy.Showmodal
+       else
+       begin
+         frmBusy.FormStyle:=fsStayOnTop;
+         frmBusy.Show;
+
+         while frmbusy.visible do
+         begin
+           Application.ProcessMessages;
+           CheckSynchronize(10);
+         end;
+       end;
+
+       frmBusy.free;
+     end;
+     {$endif}
+
+     SaveFirstScanThread.WaitFor; //wait till it's done
+     freeandnil(SaveFirstScanThread);
+   end;
+   {$ENDIF}
+
+   scanController:=TscanController.Create(true);
+   scanController.OwningMemScan:=self;
+   scanController.scantype:=stNextScan;
+   scanController.scanOption:=scanOption;
+
+   scanController.compareToSavedScan:=compareToSavedScan;
+   scanController.savedscanname:=savedscanname;
+   scanController.variableType:=fVariableType;
+   scancontroller.customType:=customtype;
+
+
+   scanController.roundingtype:=roundingtype;
+
+   scanController.fastscanalignment:=fastscanalignment;
+   scanController.fastscanmethod:=fastscanmethod;
+   scancontroller.fastscandigitcount:=fastscandigitcount;
+
+   if codepage then
+   begin
+     scanvalue1:=UTF8ToWinCP(scanvalue1);
+     scanValue2:=UTF8ToWinCP(scanvalue1);
+   end;
+
+   scanController.scanValue1:=scanvalue1; //usual scanvalue
+   scanController.scanValue2:=scanValue2; //2nd value for between scan
+   scanController.startaddress:=self.startaddress;
+   scanController.stopaddress:=self.stopaddress;
+
+   scancontroller.hexadecimal:=hexadecimal;
+   scancontroller.binaryStringAsDecimal:=binaryStringAsDecimal;
+   scancontroller.unicode:=unicode;
+   scancontroller.casesensitive:=casesensitive;
+   scancontroller.floatscanWithoutExponents:=floatscanWithoutExponents;
+   scancontroller.inverseScan:=inverseScan;
+   scancontroller.percentage:=percentage;
+   scancontroller.luaformula:=fLuaFormula;
+
+   fLastscantype:=stNextScan;
+   fLastScanValue:=scanvalue1;
+
+   scanController.start;
+
+end;
+
+procedure TMemscan.firstscan(_scanOption: TScanOption; _VariableType: TVariableType; _roundingtype: TRoundingType;
+  _scanvalue1, _scanvalue2: string; _startaddress,_stopaddress: ptruint; _hexadecimal,_binaryStringAsDecimal,_unicode,_casesensitive: boolean;
+  _fastscanmethod: TFastScanMethod=fsmNotAligned; _fastscanparameter: string=''; _customtype: TCustomType=nil);
+begin
+  Hexadecimal:=_hexadecimal;
+
+  self.fastscanparameter:=_fastscanparameter;
+  self.fastscanmethod:=_fastscanmethod;
+
+
+  self.startaddress:=_startaddress;
+  self.stopaddress:=_stopaddress;
+
+  self.scanoption:=_scanOption;
+  self.VariableType:=_VariableType;
+  self.Roundingtype:=_roundingtype;
+  self.Scanvalue1:=_scanvalue1;
+  self.Scanvalue2:=_scanvalue2;
+  self.Startaddress:=_startaddress;
+  self.Stopaddress:=_stopaddress;
+  self.BinaryStringAsDecimal:=_binaryStringAsDecimal;
+  self.Unicode:=_unicode;
+  self.Casesensitive:=_CaseSensitive;
+  self.fastscanmethod:=_fastscanmethod;
+  self.fastscanparameter:=_fastscanparameter;
+  self.customtype:=_customtype;
+
+  firstscan;
+end;
+
+procedure TMemScan.FirstScan;
+begin
   if (variableType=vtCustom) and (customtype=nil) then
     raise exception.create('customType=nil');
 
-
-  {$IFNDEF UNIX}
+  {$IFNDEF jni}
   if attachedFoundlist<>nil then
     TFoundList(Attachedfoundlist).Deinitialize;
   {$ENDIF}
@@ -7216,33 +7748,28 @@ begin
   {$ENDIF}
 
 
-  currentVariableType:=VariableType;
-  currentCustomType:=customtype;
-
   if fastscanparameter<>'' then
     self.fastscanalignment:=strtoint('$'+fastscanparameter)
   else
     self.fastscanalignment:=1;
 
-  self.fastscanmethod:=fastscanmethod;
   self.fastscandigitcount:=length(fastscanparameter);
-
-  self.startaddress:=startaddress;
-  self.stopaddress:=stopaddress;
-
 
   //OutputDebugString('Vartype='+inttostr(integer(VariableType)));
 
   scanController:=TscanController.Create(true);
   scanController.OwningMemScan:=self;
   scanController.scantype:=stFirstScan;
-  scanController.scanOption:=scanOption;
+  scanController.scanOption:=scanoption;
   scanController.variableType:=VariableType;
   scancontroller.customType:=customtype;
 
   scancontroller.scanWritable:=scanWritable;
   scancontroller.scanExecutable:=scanExecutable;
   scancontroller.scanCopyOnWrite:=scanCopyOnWrite;
+  {$ifdef darwin}
+  scancontroller.scanDirty:=scanDirty;
+  {$endif}
 
   scanController.roundingtype:=roundingtype;
 
@@ -7270,14 +7797,14 @@ begin
   scancontroller.floatscanWithoutExponents:=floatscanWithoutExponents;
   scancontroller.inverseScan:=InverseScan;
   scancontroller.percentage:=false; //first scan does not have a percentage scan
-
-  scanController.OnlyOne:=onlyone;
+  scancontroller.luaformula:=fLuaFormula;
+  scancontroller.isUnique:=fIsUnique;
+  scanController.OnlyOne:=fOnlyOne;
 
   fLastscantype:=stFirstScan;
   fLastScanValue:=scanValue1;
 
   scanController.start;
-
 
 end;
 
@@ -7291,10 +7818,13 @@ procedure TMemScan.parseProtectionflags(protectionflags: string);
 var i: integer;
     currentstate: Tscanregionpreference;
 begin
-  //parse the protectionflags string and set scanWritable, scanExecutable and scanCopyOnWrite;
+  //parse the protectionflags string and set scanWritable, scanExecutable and scanCopyOnWrite ;
   scanWritable:=scanDontCare;
   scanCopyOnWrite:=scanDontCare;
   scanExecutable:=scanDontCare;
+  {$ifdef darwin}
+  scanDirty:=scanDontCare;
+  {$endif}
 
   protectionflags:=uppercase(protectionflags);
 
@@ -7322,8 +7852,22 @@ begin
         scanExecutable:=currentState;
         currentState:=scanDontCare;
       end;
+
+      {$ifdef darwin}
+      'D':
+      begin
+        scanDirty:=currentState;
+        currentState:=scanDontCare;
+      end;
+      {$endif}
     end;
   end;
+end;
+
+procedure TMemScan.setVariableType(t: TVariableType);
+begin
+  if fLastScanType=stNewScan then //only allow change on a new scan
+    fVariableType:=t;
 end;
 
 constructor TMemScan.create(progressbar: TCustomProgressbar);
@@ -7331,8 +7875,14 @@ begin
   self.progressbar:=progressbar;
   //setup the location of the scan results
 
+  busyformIsModal:=true;
 
   CreateScanfolder;
+
+  self.VariableType:=vtDword;
+  self.ScanOption:=soExactValue;
+  self.Startaddress:=0;
+  self.Stopaddress:={$ifdef cpu32}DWORD($ffffffff){$else}QWORD($ffffffffffffffff){$endif};
 end;
 
 procedure TMemscan.CreateScanfolder;
@@ -7341,7 +7891,7 @@ var guid: TGUID;
 
     utf8: boolean;
 begin
-  OutputDebugString('CreateScanfolder');
+  //OutputDebugString('CreateScanfolder');
   CreateGUID(guid);
   if (length(trim(tempdiralternative))>2) and dontusetempdir then
     usedtempdir:=trim(tempdiralternative)
@@ -7352,7 +7902,7 @@ begin
 
   fScanResultFolder:=usedtempdir+'Cheat Engine'+pathdelim;
 
-  OutputDebugString('fScanResultFolder='+fScanResultFolder);
+ // OutputDebugString('fScanResultFolder='+fScanResultFolder);
 
 
   if DirectoryExistsUTF8(usedtempdir) then
@@ -7369,7 +7919,7 @@ begin
     if (utf8 and (not CreateDirUTF8(fScanResultFolder))) or ((not utf8) and (not CreateDir(fScanResultFolder))) then
     begin
       //failure in creating the dir
-      {$IFNDEF UNIX}
+      {$IFDEF windows}
       MakePathAccessible(fScanResultFolder);
       {$ENDIF}
       if (utf8 and (not CreateDirUTF8(fScanResultFolder))) or ((not utf8) and (not CreateDirUTF8(fScanResultFolder))) then
@@ -7377,7 +7927,7 @@ begin
     end;
   end;
 
-  {$IFNDEF UNIX}
+  {$IFDEF windows}
   MakePathAccessible(fScanResultFolder);
   {$ENDIF}
 
@@ -7395,11 +7945,11 @@ var usedtempdir: string;
     currenttime: longint;
 
 begin
-  OutputDebugString('TMemscan.DeleteScanfolder');
+ // OutputDebugString('TMemscan.DeleteScanfolder');
   if fScanResultFolder<>'' then
   begin
     try
-      if DeleteFolder(fScanResultFolder) then outputdebugstring('deleted the scanresults') else outputdebugstring('Failure deleting the scanresults');
+      if DeleteFolder(fScanResultFolder)=false then outputdebugstring('Failure deleting the scanresults');
 
 
 
@@ -7416,7 +7966,7 @@ begin
         usedtempdir:=GetTempDir;
 
 
-      if FindFirst(usedtempdir+'Cheat Engine\{*}',  faDirectory , info)=0 then
+      if FindFirst(usedtempdir+'Cheat Engine'+pathdelim+'{*}',  faDirectory , info)=0 then
       begin
         repeat
           if (info.Attr and faDirectory) = faDirectory then
@@ -7424,7 +7974,7 @@ begin
             if length(info.Name)>5 then
             begin
               //if found, delete them if older than 2 days
-              f:=usedtempdir+'Cheat Engine\'+info.name;
+              f:=usedtempdir+'Cheat Engine'+pathdelim+info.name;
 
 
               age:=info.time; //FileAge('"'+f+'"');
@@ -7455,7 +8005,7 @@ var
   DirInfo: TSearchRec;
   r : Integer;
 begin
-  OutputDebugString('TMemScan.DeleteFolder('+dir+')');
+ // OutputDebugString('TMemScan.DeleteFolder('+dir+')');
   ZeroMemory(@DirInfo,sizeof(TSearchRec));
   result := true;
 
@@ -7514,5 +8064,6 @@ begin
 
   inherited Destroy;
 end;
+
 
 end.

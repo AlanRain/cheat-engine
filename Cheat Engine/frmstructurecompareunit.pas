@@ -5,7 +5,12 @@ unit frmstructurecompareunit;
 interface
 
 uses
-  windows, Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
+  {$ifdef darwin}
+  macport,
+  {$else}
+  windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
   cefuncproc, newkernelhandler, frmStringMapUnit, MemFuncs, AvgLvlTree, Menus,
   bigmemallochandler, math, maps, oldRegExpr, symbolhandler, commonTypeDefs,
   pagemap, syncobjs2, syncobjs, Clipbrd;
@@ -77,6 +82,7 @@ type
     function getDoubleFromAddress(address: ptruint; var error: boolean): double;
     function getPointerFromAddress(address: ptruint; var error: boolean): ptruint;
 
+    procedure writeRecord(filestream: TfileStream; precord: PPointerRecord); //for sorting
   public
     vartype: TVariableType;
     procedure clearPointerCache;
@@ -85,6 +91,10 @@ type
     function getStringFromPointerRecord(p: ppointerrecord; address: ptruint; shadow: ptruint; shadowsize: integer): string;
     function getStringAndAddress(index: qword; var address: ptruint; out p: PPointerRecord; shadow: ptruint; shadowsize: integer): string;
 
+    procedure sort(offsetnr: integer);
+
+    procedure CloseFile;
+    procedure LoadFile(filename: string);
     constructor create(filename: string);
     destructor destroy; override;
 
@@ -261,15 +271,18 @@ type
     edtStructsize: TEdit;
     FindDialog1: TFindDialog;
     gbLF: TGroupBox;
-    gbNFL: TGroupBox;
+    gbNLF: TGroupBox;
+    scImageList: TImageList;
     lblAlign: TLabel;
     lblInfo: TLabel;
     lblMaxLevel: TLabel;
     lblStructsize: TLabel;
     lblvds: TLabel;
-    ListView1: TListView;
+    lvResults: TListView;
     MainMenu1: TMainMenu;
     MenuItem1: TMenuItem;
+    MenuItem2: TMenuItem;
+    miMaxAddresses: TMenuItem;
     miDeleteAddress: TMenuItem;
     miShadow: TMenuItem;
     miCut: TMenuItem;
@@ -300,6 +313,7 @@ type
     SaveDialog1: TSaveDialog;
     sbLF: TScrollBox;
     sbNLF: TScrollBox;
+    Splitter1: TSplitter;
     statusupdater: TTimer;
     tRefresher: TTimer;
     procedure btnAddAddressClick(Sender: TObject);
@@ -311,16 +325,18 @@ type
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure FormShow(Sender: TObject);
-    procedure gbNFLClick(Sender: TObject);
-    procedure ListView1CustomDrawSubItem(Sender: TCustomListView;
+    procedure gbNLFClick(Sender: TObject);
+    procedure lvResultsColumnClick(Sender: TObject; Column: TListColumn);
+    procedure lvResultsCustomDrawSubItem(Sender: TCustomListView;
       Item: TListItem; SubItem: Integer; State: TCustomDrawState;
       var DefaultDraw: Boolean);
-    procedure ListView1Data(Sender: TObject; Item: TListItem);
-    procedure ListView1DblClick(Sender: TObject);
+    procedure lvResultsData(Sender: TObject; Item: TListItem);
+    procedure lvResultsDblClick(Sender: TObject);
     procedure miCopyClick(Sender: TObject);
     procedure miCutClick(Sender: TObject);
     procedure miDeleteAddressClick(Sender: TObject);
     procedure miFindClick(Sender: TObject);
+    procedure miMaxAddressesClick(Sender: TObject);
     procedure miNewScanClick(Sender: TObject);
     procedure miOpenClick(Sender: TObject);
     procedure MenuItem7Click(Sender: TObject);
@@ -337,6 +353,7 @@ type
     pointerfilereader: TPointerfilereader;
 
     btncancel: TButton;
+    maxaddresses: integer;
 
     function mapCompare(Tree: TAvgLvlTree; Data1, Data2: Pointer): integer;
     function pointerCompare(Tree: TAvgLvlTree; Data1, Data2: Pointer): integer;
@@ -375,7 +392,7 @@ implementation
 { TfrmStructureCompare }
 
 uses frmStructPointerRescanUnit, MemoryBrowserFormUnit, ProcessHandlerUnit,
-  Parsers, addressedit, PointerscanresultReader, DPIHelper;
+  Parsers, addressedit, PointerscanresultReader, DPIHelper, ceregistry;
 
 
 resourcestring
@@ -405,6 +422,10 @@ resourcestring
   rsSPSNoError = 'No error';
   rsSPSUnlock = 'Unlock (%.8x-%.8x)';
   rsSPSLock = 'Lock';
+  rsStructureCompare = 'Structure Compare';
+  rsMaxAddressesShown = 'Max addresses shown :';
+  rsMaxReached = '...<max reached>...';
+  rsSameAddress = 'This will result in 0 results as address %s appears multiple times';
 //----------TPointerfileReader---------
 
 
@@ -482,6 +503,8 @@ var
 
   pos: int64;
 begin
+  if index>fcount then exit(nil);
+
   result:=nil;
 
 
@@ -637,12 +660,112 @@ begin
   end;
 end;
 
-constructor TPointerfileReader.create(filename: string);
+procedure TPointerfileReader.writeRecord(filestream: TfileStream; precord: PPointerRecord);
+begin
+  filestream.WriteBuffer(precord^,entrysize);
+end;
+
+procedure TPointerfileReader.sort(offsetnr: integer);  //sorts more on level than on offsetvalues
+var
+  configfile: TFilestream=nil;
+
+  results: Array of Tfilestream;
+  resultcount: integer;
+
+  tempfilename: string;
+  i: qword;
+  j: integer;
+  pr: PPointerRecord;
+
+  fl: Tstringlist;
+
+  s1,s2: string;
+begin
+  if count=0 then exit;
+  if offsetnr>pointerfilelevelwidth then exit;
+
+  tempfilename:=filename+'.sorting';
+  configfile:=tfilestream.create(tempfilename, fmCreate);
+
+  configfile.WriteByte($ec); //HEADER
+  configfile.WriteByte(compareversion);
+  configfile.WriteDWord(pointerfileLevelwidth);
+  configfile.free;
+  configfile:=nil;
+
+  setlength(results,pointerfileLevelwidth);
+  resultcount:=pointerfileLevelwidth;
+  for j:=0 to length(results)-1 do
+    results[j]:=tfilestream.create(tempfilename+'.results.'+inttostr(j+1), fmCreate);
+
+  i:=0;
+  while (i <= count-1) do
+  begin
+    pr:=getPointerRec(i);
+    writeRecord(results[pr^.level], pr);
+    inc(i);
+  end;
+
+  for j:=0 to length(results)-1 do
+  begin
+    results[j].free;
+    results[j]:=nil
+  end;
+  setlength(results,0);
+
+  closeFile;
+
+  fl:=tstringlist.create;
+  findAllResultFilesForThisPtr(filename,fl);
+  for j:=0 to fl.Count-1 do
+    DeleteFile(fl[j]);
+
+  DeleteFile(filename);
+
+  fl.free;
+  RenameFile(tempfilename, filename);
+  for j:=1 to resultcount do
+  begin
+    s1:=tempfilename+'.results.'+inttostr(j);
+    s2:=filename+'.results.'+inttostr(j);
+    if RenameFile(s1, s2)=false then
+      OutputDebugString('Failed to rename sorted results');
+  end;
+
+  loadFile(filename);
+end;
+
+procedure TPointerFileReader.closeFile;
+var i: integer;
+begin
+  if pointerrecords<>nil then
+    FreeMemAndNil(pointerrecords);
+
+  if stringbuf<>nil then
+    FreeMemAndNil(stringbuf);
+
+  widestringbuf:=nil;
+
+  if pointermap<>nil then
+    freeandnil(pointermap);
+
+  for i:=0 to length(files)-1 do
+  begin
+    if files[i].f<>nil then
+      freeandnil(files[i].f);
+  end;
+
+  setlength(files,0);
+
+  fcount:=0;
+  entrysize:=0;
+end;
+
+procedure TPointerfileReader.LoadFile(filename: string);
 var
   f: Tstringlist=nil;
   configfile: TFilestream=nil;
   i,j: integer;
-
 begin
   ffilename:=filename;
 
@@ -712,28 +835,18 @@ begin
     if configfile<>nil then
       freeandnil(configfile);
   end;
+end;
 
+constructor TPointerfileReader.create(filename: string);
+begin
+  loadFile(filename);
 end;
 
 destructor TPointerfileReader.destroy;
 var i: integer;
 begin
-  if pointerrecords<>nil then
-    FreeMemAndNil(pointerrecords);
+  closefile;
 
-  if stringbuf<>nil then
-    FreeMemAndNil(stringbuf);
-
-  if pointermap<>nil then
-    freeandnil(pointermap);
-
-  for i:=0 to length(files)-1 do
-  begin
-    if files[i].f<>nil then
-      freeandnil(files[i].f);
-  end;
-
-  setlength(files,0);
 
   //cleanup the maps
   inherited destroy;
@@ -1167,6 +1280,7 @@ var
   t1same: boolean;
   t2same: boolean;
 
+  potentialpointer: boolean;
   allreadablepointers: boolean;
   p: ptruint;
 begin
@@ -1229,6 +1343,7 @@ begin
     valid:=true;
     t1same:=true;
     t2same:=true;
+    potentialpointer:=true;
     for i:=0 to length(memoryblockNLF)-1 do
     begin
       //check if these values are in memoryblockLF. If so, not valid
@@ -1247,7 +1362,9 @@ begin
 
         if CompareMem(memoryblockNLF[i], memoryblockLF[j], alignment) then
         begin
+          //a value in table2 matches table1
           valid:=false;
+          potentialpointer:=false;
           break;
         end;
 
@@ -1273,10 +1390,11 @@ begin
       //found a possible identifier to use
       wi.path[wi.currentLevel]:=pos;
       writeResult(wi.path,wi.currentLevel);
-    end
-    else
+    end;
+
+    if (potentialpointer) then
     begin
-      allreadablepointers:=wi.currentLevel<maxlevel;
+      allreadablepointers:=(wi.currentLevel<maxlevel) and potentialpointer;
 
       if allreadablepointers then
       begin
@@ -1614,8 +1732,18 @@ begin
 
 end;
 
+procedure TfrmStructureCompare.lvResultsColumnClick(Sender: TObject;
+  Column: TListColumn);
+begin
+  if pointerfilereader<>nil then
+  begin
+    if (pointerfilereader.count>10000000) and (MessageDlg('There are over 10000000 entries in this list. This may take a while. Are you sure?', mtConfirmation,[mbyes,mbno],0)<>mryes) then exit;
 
-procedure TfrmStructureCompare.ListView1Data(Sender: TObject; Item: TListItem);
+    pointerfilereader.sort(column.Index);
+  end;
+end;
+
+procedure TfrmStructureCompare.lvResultsData(Sender: TObject; Item: TListItem);
 var
   i: integer;
   s,s2: string;
@@ -1624,6 +1752,8 @@ var
   a2: ptruint;
 
   p: PPointerRecord;
+
+  count: integer;
 
   procedure HandleAddress(edt: TAddressEdit);
   var
@@ -1676,25 +1806,44 @@ begin
         item.SubItems.Add(' ');
 
 
+      count:=0;
+
       for i:=0 to edtLF.count-1 do
+      begin
+        inc(count);
+        if count>maxAddresses then
+        begin
+          item.subitems.add(rsMaxReached);
+          exit;
+        end;
+
         HandleAddress(TAddressEdit(edtLF[i]));
+      end;
 
       for i:=0 to edtNLF.count-1 do
+      begin
+        inc(count);
+        if count>maxAddresses then
+        begin
+          item.subitems.add(rsMaxReached);
+          exit;
+        end;
         HandleAddress(TAddressEdit(edtNLF[i]));
+      end;
 
 
     end;
   end;
 end;
 
-procedure TfrmStructureCompare.ListView1DblClick(Sender: TObject);
+procedure TfrmStructureCompare.lvResultsDblClick(Sender: TObject);
 var
   p: tpoint;
   i,j: integer;
   x: integer;
   a: ptruint;
 begin
-  if (listview1.Selected<>nil) and (pointerfilereader<>nil) then
+  if (lvResults.Selected<>nil) and (pointerfilereader<>nil) then
   begin
     if edtLF.count>1 then
       a:=TAddressEdit(edtLF[0]).address
@@ -1706,11 +1855,11 @@ begin
 
 
     //get the mousecursor
-    p:=listview1.ScreenToClient(mouse.CursorPos);
+    p:=lvResults.ScreenToClient(mouse.CursorPos);
     x:=0;
-    for i:=0 to listview1.Columns.Count-1 do
+    for i:=0 to lvResults.Columns.Count-1 do
     begin
-      if (p.x>x) and (p.x<x+listview1.Column[i].Width) then
+      if (p.x>x) and (p.x<x+lvResults.Column[i].Width) then
       begin
         //found the columns
         j:=i-pointerfilereader.pointerfileLevelwidth;
@@ -1727,9 +1876,9 @@ begin
         break;
       end;
 
-      inc(x, listview1.Column[i].Width);
+      inc(x, lvResults.Column[i].Width);
     end;
-    MemoryBrowser.hexview.address:=pointerfilereader.getAddressFromPointerRecord(pointerfilereader.getPointerRec(listview1.Selected.Index), a, 0, 0);
+    MemoryBrowser.hexview.address:=pointerfilereader.getAddressFromPointerRecord(pointerfilereader.getPointerRec(lvResults.Selected.Index), a, 0, 0);
   end;
 end;
 
@@ -1820,6 +1969,22 @@ begin
   finddialog1.execute;
 end;
 
+procedure TfrmStructureCompare.miMaxAddressesClick(Sender: TObject);
+var
+  s: string;
+  i: integer;
+begin
+  s:=inttostr(maxaddresses);
+  if InputQuery(rsStructureCompare, rsMaxAddressesShown, s) then
+  begin
+    maxaddresses:=strtoint(s);
+    if maxaddresses<0 then
+      maxaddresses:=0;
+
+    miMaxAddresses.caption:=format(rsMaxAddressesShown+' %d',[maxaddresses]);
+  end;
+end;
+
 procedure TfrmStructureCompare.OpenPointerfile(filename: string);
 begin
   cleanup;
@@ -1832,7 +1997,7 @@ begin
 
 
 
-  listview1.items.count:=min(1000000, pointerfilereader.count);
+  lvResults.items.count:=dword(min(dword(1000000), dword(pointerfilereader.count)));
   lblInfo.caption:=inttostr(pointerfilereader.count);
 end;
 
@@ -1920,9 +2085,9 @@ begin
     freeandnil(scanner);
   end;
 
-  listview1.items.count:=0;
-  while listview1.ColumnCount>0 do
-    listview1.Columns.Delete(0);
+  lvResults.items.count:=0;
+  while lvResults.ColumnCount>0 do
+    lvResults.Columns.Delete(0);
 
   if pointerfilereader<>nil then
     freeandnil(pointerfilereader);
@@ -1956,9 +2121,11 @@ var baseaddress: ptruint;
 
   oldpointerfile: string;
 
-  i: integer;
+  i,j: integer;
   LF: array of TAddressWithShadow;
   NLF: array of TAddressWithShadow;
+
+  s: string;
 begin
 
   if pointerfilereader<>nil then
@@ -1971,6 +2138,7 @@ begin
   for i:=0 to edtLF.count-1 do
   begin
     lf[i].address:=TAddressEdit(edtLF[i]).address;
+
     if TAddressEdit(edtLF[i]).tag<>0 then
     begin
       lf[i].shadow:=TShadow(TAddressEdit(edtLF[i]).tag).Address;
@@ -1983,12 +2151,16 @@ begin
     end;
 
     if TAddressEdit(edtLF[i]).invalidAddress then raise exception.create(Format(rsInvalidGroup, [1, inttostr(i+1), TAddressEdit(edtLF[i]).text]));
+
+    for j:=0 to i-1 do
+      if (lf[j].address=lf[i].address) and (lf[i].shadow=lf[j].shadow) then raise exception.create(Format(rsSameAddress, [TAddressEdit(edtLF[i]).text]));
   end;
 
   setlength(NLF, edtNLF.count);
   for i:=0 to edtNLF.count-1 do
   begin
     nlf[i].address:=TAddressEdit(edtNLF[i]).address;
+
     if TAddressEdit(edtNLF[i]).tag<>0 then
     begin
       nlf[i].shadow:=TShadow(TAddressEdit(edtNLF[i]).tag).Address;
@@ -2000,6 +2172,24 @@ begin
       nlf[i].shadowsize:=0;
     end;
     if TAddressEdit(edtNLF[i]).invalidAddress then raise exception.create(Format(rsInvalidGroup, [2, inttostr(i+1), TAddressEdit(edtNLF[i]).text]));
+
+    for j:=0 to i-1 do
+    begin
+      if (nlf[j].address=nlf[i].address) and (nlf[i].shadow=nlf[j].shadow) then
+      begin
+        s:=TAddressEdit(edtNLF[i]).text;
+        raise exception.create(Format(rsSameAddress, [s]));
+      end;
+    end;
+
+    for j:=0 to length(lf)-1 do
+    begin
+      if (lf[j].address=nlf[i].address) and (lf[i].shadow=nlf[j].shadow) then
+      begin
+        s:=TAddressEdit(edtNLF[i]).text;
+        raise exception.create(Format(rsSameAddress, [s]));
+      end;
+    end;
   end;
 
   maxlevel:=strtoint(edtMaxLevel.text);
@@ -2044,7 +2234,7 @@ begin
   if pointerfilereader<>nil then
     pointerfilereader.hexadecimal:=cbHexadecimal.checked;
 
-  listview1.Refresh;
+  lvResults.Refresh;
 end;
 
 procedure TfrmStructureCompare.reloadlistviewcolumns;
@@ -2055,22 +2245,22 @@ var
 begin
   if pointerfilereader=nil then
   begin
-    if listview1.Columns.Count>0 then
-      listview1.Columns.Clear;
+    if lvResults.Columns.Count>0 then
+      lvResults.Columns.Clear;
   end
   else
   begin
     nr:=0;
     for i:=0 to pointerfilereader.levelWidth-1 do
     begin
-      if listview1.Columns.count<=nr then
+      if lvResults.Columns.count<=nr then
       begin
-        lc:=listview1.Columns.Add;
+        lc:=lvResults.Columns.Add;
         lc.MinWidth:=2;
         lc.Width:=70;
       end
       else
-        lc:=listview1.Column[nr];
+        lc:=lvResults.Column[nr];
 
       lc.Caption:=rsSPSUOffset+inttostr(i);
       inc(nr);
@@ -2079,14 +2269,14 @@ begin
 
     for i:=0 to edtLF.Count-1 do
     begin
-      if listview1.Columns.count<=nr then
+      if lvResults.Columns.count<=nr then
       begin
-        lc:=listview1.Columns.Add;
+        lc:=lvResults.Columns.Add;
         lc.MinWidth:=2;
         lc.Width:=120;
       end
       else
-        lc:=listview1.Column[nr];
+        lc:=lvResults.Column[nr];
 
       lc.Caption:='G1:'+TAddressEdit(edtLF[i]).Text;
       inc(nr);
@@ -2094,21 +2284,21 @@ begin
 
     for i:=0 to edtNLF.Count-1 do
     begin
-      if listview1.Columns.count<=nr then
+      if lvResults.Columns.count<=nr then
       begin
-        lc:=listview1.Columns.Add;
+        lc:=lvResults.Columns.Add;
         lc.MinWidth:=2;
         lc.Width:=120;
       end
       else
-        lc:=listview1.Column[nr];
+        lc:=lvResults.Column[nr];
 
       lc.Caption:='G2:'+TAddressEdit(edtNLF[i]).Text;
       inc(nr);
     end;
 
-    while listview1.columns.count>nr do
-      listview1.Columns.Delete(listview1.columns.count-1);
+    while lvResults.columns.count>nr do
+      lvResults.Columns.Delete(lvResults.columns.count-1);
 
   end;
 end;
@@ -2116,7 +2306,7 @@ end;
 procedure TfrmStructureCompare.AddressEditChange(Sender: TObject);
 begin
   reloadlistviewcolumns;
-  listview1.Refresh;
+  lvResults.Refresh;
 end;
 
 procedure TfrmStructureCompare.btnAddAddressClick(Sender: TObject);
@@ -2155,7 +2345,7 @@ begin
       8: pointerfilereader.vartype:=vtPointer;
     end;
 
-    listview1.Refresh;
+    lvResults.Refresh;
 
   end;
 end;
@@ -2176,15 +2366,15 @@ begin
   cs:=frMatchCase in finddialog1.Options;
   if not cs then findtext:=uppercase(findtext);
 
-  for i:=listview1.ItemIndex+1 to listview1.Items.Count-1 do
+  for i:=lvResults.ItemIndex+1 to lvResults.Items.Count-1 do
   begin
-    s:=listview1.items[i].SubItems.Text;
+    s:=lvResults.items[i].SubItems.Text;
     if not cs then s:=uppercase(s);
 
     if pos(FindText, s)>0 then
     begin
-      listview1.ItemIndex:=i;
-      listview1.Items[i].MakeVisible(false);
+      lvResults.ItemIndex:=i;
+      lvResults.Items[i].MakeVisible(false);
       exit;
     end;
   end;
@@ -2207,6 +2397,8 @@ begin
   edtNLF:=Tlist.create;
   autosize:=false;
   LoadFormPosition(self);
+
+  maxAddresses:=cereg.readInteger('Structure Compare Max Addresses', 32);
 end;
 
 procedure TfrmStructureCompare.FormDestroy(Sender: TObject);
@@ -2215,11 +2407,14 @@ begin
   edtNLF.free;
 
   SaveFormPosition(self);
+  cereg.writeInteger('Structure Compare Max Addresses', maxaddresses);
 end;
 
 procedure TfrmStructureCompare.FormShow(Sender: TObject);
+var w,b,mh: integer;
 begin
   //panel1.Constraints.MinHeight:=btnNewScan.Top+btnNewScan.Height+lblInfo.Height+4;
+
   if edtLF.Count=0 then
     btnAddAddressLF.click;
 
@@ -2227,14 +2422,37 @@ begin
     btnAddAddressNLF.click;
 
   AdjustComboboxSize(comboType, canvas);
+
+ // gbLF.Constraints.MinWidth:=GetEditBoxMargins(tedit(edtLF[0]))+canvas.TextWidth(' XXXXXXXXXXXXXXXX ');
+  w:=GetEditBoxMargins(edtMaxLevel)+canvas.TextWidth(' XXXXXXXXXXXXXXXX ');      ;
+
+
+  b:=tedit(edtLF[0]).ClientToParent(point(0,0),gbLF).x;
+
+
+  gbLF.Constraints.MinWidth:=w+b;
+  gbNLF.Constraints.MinWidth:=w+b;
+
+  gbLF.ClientWidth:=w+b;
+  gbNLF.ClientWidth:=w+b;
+
+  Constraints.MinWidth:=panel7.left+panel7.Width;
+
+  mh:=panel9.top+panel9.height+lblinfo.height;
+  panel3.Constraints.MinHeight:=mh;
 end;
 
-procedure TfrmStructureCompare.gbNFLClick(Sender: TObject);
+
+
+
+procedure TfrmStructureCompare.gbNLFClick(Sender: TObject);
 begin
 
 end;
 
-procedure TfrmStructureCompare.ListView1CustomDrawSubItem(
+
+
+procedure TfrmStructureCompare.lvResultsCustomDrawSubItem(
   Sender: TCustomListView; Item: TListItem; SubItem: Integer;
   State: TCustomDrawState; var DefaultDraw: Boolean);
 var i: integer;
@@ -2304,7 +2522,7 @@ begin
   if pointerfilereader<>nil then
     pointerfilereader.clearPointerCache;
 
-  listview1.Refresh;
+  lvResults.Refresh;
 end;
 
 procedure TfrmStructureCompare.miPasteClick(Sender: TObject);
@@ -2360,7 +2578,7 @@ begin
     e.tag:=0;
     e.ReadOnly:=false;
 
-    listview1.Refresh;
+    lvResults.Refresh;
     exit;
   end;
 
@@ -2399,6 +2617,8 @@ begin
   else
     miShadow.caption:=rsSPSLock;
 end;
+
+
 
 procedure TfrmStructureCompare.statusupdaterTimer(Sender: TObject);
 var
@@ -2441,7 +2661,7 @@ end;
 
 procedure TfrmStructureCompare.tRefresherTimer(Sender: TObject);
 begin
-  listview1.refresh;
+  lvResults.refresh;
 end;
 
 procedure TfrmStructureCompare.setGUIStateEnabled(state: boolean);

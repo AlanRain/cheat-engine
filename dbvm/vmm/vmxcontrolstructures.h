@@ -47,6 +47,7 @@
 //secondary processor based vm-execution flags
 #define SPBEF_ENABLE_EPT            (1<<1)
 #define SPBEF_ENABLE_RDTSCP         (1<<3)
+#define SPBEF_ENABLE_VPID           (1<<5)
 #define SPBEF_ENABLE_UNRESTRICTED   (1<<7)
 #define SPBEF_ENABLE_INVPCID        (1<<12)
 #define SPBEF_ENABLE_XSAVES         (1<<20)
@@ -73,11 +74,14 @@
 #define FEATURE_CONTROL_VMXON 		(1<<2)
 
 #define vm_exit_interrupt   0
+#define vm_exit_init        3
 #define vm_exit_sipi        4
 #define vm_exit_taskswitch  9
 #define vm_exit_cpuid      10
 #define vm_exit_invlpg     14
+#define vm_exit_rdtsc      16
 #define vm_exit_vmcall     18
+#define vm_exit_vmlaunch   20
 #define vm_exit_vmptrld    21
 #define vm_exit_vmread     23
 #define vm_exit_vmresume   24
@@ -89,8 +93,11 @@
 #define vm_exit_monitor_trap_flag 37
 #define vm_exit_ept_violation 48
 #define vm_exit_ept_misconfiguration 49
+#define vm_exit_invept     50
 #define vm_exit_vmx_preemptiontimer_reachedzero  52
-#define vm_exit_xsetbv    55
+#define vm_exit_invvpid    53
+#define vm_exit_xsetbv     55
+#define vm_exit_invpcid    58
 #define vm_exit_invalid_guest_state  0x80000021
 
 

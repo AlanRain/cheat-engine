@@ -10,32 +10,51 @@ interface
 
 {$ifdef windows}
 uses
-  windows, Classes, SysUtils, AvgLvlTree, math, fgl, cvconst, syncobjs, symbolhandlerstructs;
+  windows, Classes, SysUtils, AvgLvlTree, laz_avl_Tree, math, fgl, cvconst, syncobjs, symbolhandlerstructs;
 {$endif}
 
-{$ifdef unix}
+{$ifdef darwin}
 uses
-  unixporthelper, Classes, SysUtils, AvgLvlTree, math, fgl, cvconst, syncobjs;
+  macport, Classes, SysUtils, AvgLvlTree, math, fgl, cvconst, syncobjs, symbolhandlerstructs;
 {$endif}
 
 type
   PSYMBOL_INFO = ^TSYMBOL_INFO;
+  (*
+  typedef struct _SYMBOL_INFO {
+      ULONG       SizeOfStruct;
+      ULONG       TypeIndex;        // Type Index of symbol
+      ULONG64     Reserved[2];
+      ULONG       Index;
+      ULONG       Size;
+      ULONG64     ModBase;          // Base Address of module comtaining this symbol
+      ULONG       Flags;
+      ULONG64     Value;            // Value of symbol, ValuePresent should be 1
+      ULONG64     Address;          // Address of symbol including base address of module
+      ULONG       Register;         // register holding value or pointer to value
+      ULONG       Scope;            // scope of the symbol
+      ULONG       Tag;              // pdb classification
+      ULONG       NameLen;          // Actual length of name
+      ULONG       MaxNameLen;
+      CHAR        Name[1];          // Name of symbol
+  } SYMBOL_INFO, *PSYMBOL_INFO;
+ *)
   TSYMBOL_INFO = {packed} record
           SizeOfStruct : ULONG;
           TypeIndex : ULONG;
           Reserved : array[0..1] of ULONG64;
-          info : ULONG;
+          index : ULONG;
           Size : ULONG;
           ModBase : ULONG64;
           Flags : ULONG;
           Value : ULONG64;
           Address : ULONG64; //it's more a signed address
-          Register : ULONG;
+          Reg : ULONG;
           Scope : ULONG;
           Tag : ULONG;
           NameLen : ULONG;
           MaxNameLen : ULONG;
-          Name : array[0..0] of TCHAR;
+          Name : array[0..0] of char;
        end;
   SYMBOL_INFO = TSYMBOL_INFO;
   LPSYMBOL_INFO = PSYMBOL_INFO;
@@ -137,13 +156,9 @@ type
 
 implementation
 
-{$ifdef windows}
-uses CEFuncProc, symbolhandler;
-{$endif}
 
-{$ifdef unix}
-uses symbolhandler;
-{$endif}
+uses CEFuncProc, symbolhandler;
+
 
 
 
@@ -600,8 +615,12 @@ begin
 end;
 
 procedure TSymbolListHandler.clear;
-var x: TAvgLvlTreeNode;
+var
+  x: TAvgLvlTreeNode;
   d:PCESymbolInfo;
+  i: integer;
+
+  e: TAVLTreeNodeEnumerator;
 begin
   cs.Beginwrite;
   try
@@ -622,14 +641,34 @@ begin
           strDispose(d^.module);
 
         FreeMemAndNil(d);
+        x.data:=nil;
         x:=StringToAddress.FindSuccessor(x);
       end;
+
+      {
+      x:=StringToAddress.Root;
+      while x<>nil do
+      begin
+        if x.data<>nil then
+        begin
+          OutputDebugString('Missed one');
+        end;
+
+        StringToAddress.Delete(x);
+        x:=stringtoaddress.root;
+      end;}
+
 
       StringToAddress.Clear;
     end;
 
     if AddressToString<>nil then
       AddressToString.Clear;
+
+    for i:=0 to ExtraSymbolDataList.count-1 do
+      TExtraSymbolData(ExtraSymbolDataList[i]).free;
+
+    ExtraSymbolDataList.clear;
 
   finally
     cs.endwrite;
@@ -666,7 +705,6 @@ end;
 destructor TSymbolListHandler.destroy;
 var i: integer;
 begin
-
   if symhandler<>nil then
     symhandler.RemoveSymbolList(self);
 

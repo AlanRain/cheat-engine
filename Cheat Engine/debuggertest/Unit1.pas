@@ -32,9 +32,13 @@ type
     Button1: TButton;
     Button10: TButton;
     Button11: TButton;
+    Button12: TButton;
     Button2: TButton;
+    edtTimeout: TEdit;
     Label1: TLabel;
     Button3: TButton;
+    Label10: TLabel;
+    Label11: TLabel;
     Label2: TLabel;
     Button4: TButton;
     Label3: TLabel;
@@ -51,8 +55,10 @@ type
     Button9: TButton;
     Timer1: TTimer;
     Timer2: TTimer;
+    Timer3: TTimer;
     procedure Button10Click(Sender: TObject);
     procedure Button11Click(Sender: TObject);
+    procedure Button12Click(Sender: TObject);
     procedure Button1Click(Sender: TObject);
     procedure Button2Click(Sender: TObject);
     procedure FormCreate(Sender: TObject);
@@ -66,6 +72,7 @@ type
     procedure Button9Click(Sender: TObject);
     procedure Timer1Timer(Sender: TObject);
     procedure Timer2Timer(Sender: TObject);
+    procedure Timer3Timer(Sender: TObject);
   private
     { Private declarations }
     originalIntegrityValue: dword;
@@ -360,7 +367,25 @@ end;
 procedure TForm1.Button11Click(Sender: TObject);
 begin
   TChangeHealthLikeAMofo.create(false);
+  TChangeHealthLikeAMofo.create(false);
+  TChangeHealthLikeAMofo.create(false);
   timer1.enabled:=true;
+end;
+
+procedure TForm1.Button12Click(Sender: TObject);
+var
+  c: tchangehealththread;
+  timeout: integer;
+begin
+  c:=tchangehealththread.create(false);
+  timeout:=strtoint(edtTimeout.text);
+  sleep(timeout);
+  c.changehealthevent.setEvent;
+
+  sleep(100);
+
+  c.terminate;
+  c.free;
 end;
 
 procedure TForm1.Button2Click(Sender: TObject);
@@ -383,9 +408,10 @@ begin
   button4.click;
 
   label9.caption:=format('%p',[@h]);
+  }
 
   cht:=tchangehealththread.create(false);
-  originalIntegrityValue:=generateIntegrityValue; }
+//  originalIntegrityValue:=generateIntegrityValue;
 end;
 
 
@@ -445,6 +471,7 @@ end;
 
 procedure TForm1.Button7Click(Sender: TObject);
 begin
+
   cht.changehealthevent.SetEvent;
 end;
 
@@ -484,6 +511,20 @@ end;
 procedure TForm1.Timer2Timer(Sender: TObject);
 begin
   button10.click;
+end;
+
+var ec: integer;
+procedure TForm1.Timer3Timer(Sender: TObject);
+begin
+  try
+    asm
+    int3
+    sub [ec],1
+    end;
+  except
+    inc(ec);
+  end;
+  label10.caption:=inttostr(ec);
 end;
 
 end.

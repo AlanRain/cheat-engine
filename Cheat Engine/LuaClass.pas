@@ -54,6 +54,8 @@ procedure luaclass_newClassFunction(L: PLua_State; InitialAddMetaDataFunction: T
 
 procedure luaclass_register(c: TClass; InitialAddMetaDataFunction: TAddMetaDataFunction);
 
+procedure luaclass_pushClass(L: PLua_State; o: TObject); stdcall; //for plugins
+
 implementation
 
 uses LuaClassArray, LuaObject, LuaComponent, luahandler;
@@ -217,6 +219,10 @@ begin
     lua_pushnil(L);
 end;
 
+procedure luaclass_pushClass(L: PLua_State; o: TObject); stdcall; //for plugins
+begin
+  luaclass_newClass(L,o);
+end;
 
 function luaclass_getClassObject(L: PLua_state; paramstart: pinteger=nil; paramcount: pinteger=nil): pointer;// inline;
 //called as first thing by class functions. This is in case a 6.2 code executed the function manually
@@ -460,7 +466,26 @@ begin
           lua_pushvalue(L, 2); //key
           lua_pushvalue(L, 3); //value
           lua_call(L, 2,0); //call __defaultintegersetindexhandler(key, value);
-        end;
+          exit;
+        end
+        else
+          lua_pop(L,1);
+      end;
+
+      if lua_type(L, 2)=LUA_TSTRING then
+      begin
+        //check if there is a __defaultstringsetindexhandler defined in the metatable
+        lua_pushstring(L, '__defaultstringsetindexhandler');
+        lua_gettable(L, metatable);
+        if lua_isfunction(L,-1) then
+        begin
+          lua_pushvalue(L, 2); //key
+          lua_pushvalue(L, 3); //value
+          lua_call(L, 2, 0); //call __defaultstringsetindexhandler(key, value)
+          exit;
+        end
+        else
+          lua_pop(L,1);
       end;
     end;
 

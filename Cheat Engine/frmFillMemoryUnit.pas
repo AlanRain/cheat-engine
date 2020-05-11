@@ -5,7 +5,13 @@ unit frmFillMemoryUnit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls,
+  {$ifdef darwin}
+  macport, math,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls,
   Forms, Dialogs, StdCtrls, CEFuncProc, NewKernelHandler, LResources, ExtCtrls;
 
 type
@@ -58,13 +64,13 @@ var start,stop: ptrUint;
 begin
   //fill the memory
   try
-    start:=strtoint('$'+edit1.Text);
+    start:=strtoint64('$'+edit1.Text);
   except
     raise exception.Create(rsPleaseFillInAValidFromAddress);
   end;
 
   try
-    stop:=strToInt('$'+edit2.Text);
+    stop:=strToInt64('$'+edit2.Text);
   except
     raise exception.Create(rsPleaseFillInAValidToAddress);
   end;

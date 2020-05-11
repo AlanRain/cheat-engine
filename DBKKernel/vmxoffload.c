@@ -4,7 +4,7 @@ copies dbvm into physical memory
 jumps into dbvm's os entry point
 
 */
-#pragma warning( disable: 4100 4103 4152 4456)
+#pragma warning( disable: 4100 4103 4152 4189 4456)
 
 #ifndef AMD64
 #pragma warning( disable: 4740)
@@ -912,13 +912,13 @@ void vmxoffload_override(CCHAR cpunr, PKDEFERRED_ROUTINE Dpc, PVOID DeferredCont
 	if (mdl)
 	{
 		//convert the pfnlist to a list DBVM understands
-		PDBVMOffloadMemInfo mi = ExAllocatePool(PagedPool, sizeof(DBVMOffloadMemInfo));
+		PDBVMOffloadMemInfo mi = ExAllocatePool(NonPagedPool, sizeof(DBVMOffloadMemInfo));
 		int i;
 		PFN_NUMBER *pfnlist;
 
 		DbgPrint("vmxoffload_override: mi=%p\n", mi);
 		
-		mi->List = ExAllocatePool(PagedPool, sizeof(UINT64) * 16);
+		mi->List = ExAllocatePool(NonPagedPool, sizeof(UINT64) * 16);
 
 		DbgPrint("vmxoffload_override: mi->list=%p\n", mi->List);
 

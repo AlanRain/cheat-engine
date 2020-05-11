@@ -5,10 +5,16 @@ unit formChangedAddresses;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls,CEFuncProc, ExtCtrls, ComCtrls, Menus, NewKernelHandler, LResources,
   disassembler, symbolhandler, byteinterpreter, CustomTypeHandler, maps, math, Clipbrd,
-  addressparser, commonTypeDefs;
+  addressparser, commonTypeDefs, DBK32functions, vmxfunctions;
 
 type
   TAddressEntry=class
@@ -29,11 +35,31 @@ type
 
 
   { TfrmChangedAddresses }
+  TfrmChangedAddresses=class;
+
+  {$ifdef windows}
+  TDBVMWatchExecutePollThread=class(TThread)
+  private
+    results: PPageEventListDescriptor;
+    resultsize: integer;
+
+    cr3disassembler: Tcr3Disassembler;
+    procedure addEntriesToList;
+  public
+    id: integer;
+    fca: TfrmChangedAddresses;
+    procedure execute; override;
+  end;
+  {$endif}
 
   TfrmChangedAddresses = class(TForm)
+    caImageList: TImageList;
     lblInfo: TLabel;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
+    MenuItem3: TMenuItem;
+    miSetFilter: TMenuItem;
+    N1: TMenuItem;
     miCommonalitiesSubgroup: TMenuItem;
     miMarkAsGroup1: TMenuItem;
     miMarkAsGroup2: TMenuItem;
@@ -60,6 +86,8 @@ type
     procedure ChangedlistCustomDrawItem(Sender: TCustomListView;
       Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
     procedure MenuItem1Click(Sender: TObject);
+    procedure MenuItem3Click(Sender: TObject);
+    procedure miSetFilterClick(Sender: TObject);
     procedure miGroupClearClick(Sender: TObject);
     procedure miMarkAsGroupClick(Sender: TObject);
     procedure miDeleteSelectedEntriesClick(Sender: TObject);
@@ -83,15 +111,33 @@ type
     addresslist: TMap;
     faddress: ptruint;
     defaultcolor: TColor;
-    procedure refetchValues(specificaddress: ptruint=0);
+
+    fdbvmwatchid: integer;
+    {$ifdef windows}
+    dbvmwatchpollthread: TDBVMWatchExecutePollThread;
+    {$endif}
+
+    currentFilter: string;
+    currentFilterFunc: integer;
+    filterExtraRegs: boolean;
+    function checkFilter(entry: TaddressEntry): boolean;
+    procedure rebuildListWithFilter;
+
+    procedure stopdbvmwatch;
+    procedure refetchValues(specificaddress: ptruint=0;countonly: boolean=false);
     procedure setAddress(a: ptruint);
+    procedure setdbvmwatchid(id: integer);
   public
     { Public declarations }
     equation: string;
     foundcodedialog: pointer;
 
+    dbvmwatch_unlock: qword;
+
+    procedure clearFilter;
     procedure AddRecord;
     property address: ptruint read fAddress write setAddress;
+    property dbvmwatchid: integer read fdbvmwatchid write setdbvmwatchid;
   end;
 
 
@@ -100,20 +146,32 @@ implementation
 
 uses CEDebugger, MainUnit, frmRegistersunit, MemoryBrowserFormUnit, debughelper,
   debugeventhandler, debuggertypedefinitions, FoundCodeUnit, StructuresFrm2,
-  processhandlerunit, Globals, Parsers, frmStackViewUnit, frmSelectionlistunit,
-  frmChangedAddressesCommonalityScannerUnit;
+  ProcessHandlerUnit, Globals, Parsers, frmStackViewUnit, frmSelectionlistunit,
+  frmChangedAddressesCommonalityScannerUnit, LastDisassembleData, lua, lauxlib,
+  lualib, luahandler;
 
 resourcestring
   rsStop='Stop';
   rsClose='Close';
   rsNoDescription = 'No Description';
-  rsChangedAddressesBy = 'Changed Addresses by %x';
+  rsChangedAddressesBy = 'Accessed addresses by %x';
   rsDesignateSomeAddresses = 'Please designate a group to at least some '
     +'addresses';
   rsNoAddressesLeftForGroup = 'There are no addresses left for group %d';
   rsInvalidGroups = 'Invalid groups';
   rsDeleteAddresses = 'Delete addresses';
   rsAreYouWishToDelete = 'Are you sure you wish to delete these entries(s)?';
+  rsCodeAccessesSingleAddress = 'This address has been accessed by the code '
+    +'you selected';
+  rsCodeAccessesAddresses = 'The following %d addresses have been accessed by '
+    +'the code you selected';
+  rsValueChange = 'Value Change';
+  rsGiveTheNewValue = 'Give the new value';
+  rsFilter = 'Filter';
+  rsEnterLuaFormula = 'Enter a Lua formula to use to filter. E.g RCX==0x2301'
+    +'adc0.  Empty for no filter';
+
+
 
 destructor TAddressEntry.destroy;
 begin
@@ -134,6 +192,211 @@ begin
   end;
 end;
 
+
+//-----------------------------
+
+{$IFDEF windows}
+procedure TDBVMWatchExecutePollThread.addEntriesToList;
+var
+  c: TContext;
+  coderecord: TCodeRecord;
+  i,j: integer;
+  opcode,desc: string;
+  li: TListItem;
+  ldi: TLastDisassembleData;
+
+  basicinfo: TPageEventBasic;
+
+  basic: PPageEventBasicArray;
+  extended: PPageEventExtendedArray absolute basic;
+  basics: PPageEventBasicWithStackArray absolute basic;
+  extendeds: PPageEventExtendedWithStackArray absolute basic;
+
+  address, address2: ptruint;
+
+  skip: boolean;
+
+  debug,debug2: pointer;
+  x: TaddressEntry;
+  haserror: boolean;
+  s: string;
+begin
+  outputdebugstring('addEntriesToList ('+inttostr(results^.numberOfEntries)+')');
+
+  try
+    basic:=PPageEventBasicArray(ptruint(results)+sizeof(TPageEventListDescriptor));
+
+    for i:=0 to results^.numberOfEntries-1 do
+    begin
+
+      case results^.entryType of
+        0: basicinfo:=basic^[i];
+        1: basicinfo:=extended^[i].basic;
+        2: basicinfo:=basics^[i].basic;
+        3: basicinfo:=extendeds^[i].basic;
+      end;
+
+      ZeroMemory(@c,sizeof(c));
+
+      c.{$ifdef cpu64}Rax{$else}Eax{$endif}:=basicinfo.RAX;
+      c.{$ifdef cpu64}Rbx{$else}Ebx{$endif}:=basicinfo.RBX;
+      c.{$ifdef cpu64}Rcx{$else}Ecx{$endif}:=basicinfo.RCX;
+      c.{$ifdef cpu64}Rdx{$else}Edx{$endif}:=basicinfo.RDX;
+      c.{$ifdef cpu64}Rsi{$else}Esi{$endif}:=basicinfo.RSI;
+      c.{$ifdef cpu64}Rdi{$else}Edi{$endif}:=basicinfo.RDI;
+      c.{$ifdef cpu64}Rbp{$else}Ebp{$endif}:=basicinfo.RBP;
+      c.{$ifdef cpu64}Rsp{$else}Esp{$endif}:=basicinfo.Rsp;
+      c.{$ifdef cpu64}Rip{$else}Eip{$endif}:=basicinfo.Rip;
+      {$ifdef cpu64}
+      c.R8:=basicinfo.R8;
+      c.R9:=basicinfo.R9;
+      c.R10:=basicinfo.R10;
+      c.R11:=basicinfo.R11;
+      c.R12:=basicinfo.R12;
+      c.R13:=basicinfo.R13;
+      c.R14:=basicinfo.R14;
+      c.R15:=basicinfo.R15;
+      {$endif}
+
+      address:=symhandler.getAddressFromName(fca.equation, false, haserror, @c);
+      if haserror=false then
+      begin
+
+        //check if address is in the list
+        if fca.addresslist.GetData(address,x) then
+        begin
+          inc(x.count,basicinfo.Count+1);
+          fca.refetchValues(x.address, true);
+          continue;
+        end;
+
+        //still here so not in the list, get more info and add it
+
+        c.EFlags:=basicinfo.FLAGS;
+        c.SegCs:=basicinfo.CS;
+        c.SegSs:=basicinfo.SS;
+        c.SegDs:=basicinfo.DS;
+        c.SegEs:=basicinfo.ES;
+        c.SegFs:=basicinfo.FS;
+        c.SegGs:=basicinfo.GS;
+
+        x:=TAddressEntry.Create;
+        x.address:=address;
+        x.count:=basicinfo.Count+1;
+
+        case results^.entryType of
+          1:
+          begin
+            //fpu
+            copymemory(@c.{$ifdef cpu64}FltSave{$else}ext{$endif}, @extended^[i].fpudata, sizeof(c.{$ifdef cpu64}FltSave{$else}ext{$endif}));
+          end;
+          2:
+          begin
+            //stack
+            getmem(x.stack.stack, 4096);
+            copymemory(x.stack.stack, @basics^[i].stack[0], 4096);
+            x.stack.savedsize:=4096;
+          end;
+
+          3:
+          begin
+            //fpu/stack
+            copymemory(@c.{$ifdef cpu64}FltSave{$else}ext{$endif}, @extended^[i].fpudata, sizeof(c.{$ifdef cpu64}FltSave{$else}ext{$endif}));
+            getmem(x.stack.stack, 4096);
+            copymemory(x.stack.stack, @basics^[i].stack[0], 4096);
+            x.stack.savedsize:=4096;
+          end;
+        end;
+
+        x.context:=c;
+
+        OutputDebugString('adding to the lists');
+        s:=inttohex(address,8);
+
+        fca.addresslist.Add(address, x);
+
+        if fca.checkFilter(x) then
+        begin
+          li:=fca.changedlist.Items.add;
+          li.caption:=s;
+          li.SubItems.Add('');
+          li.subitems.add('1');
+          li.Data:=x;
+        end;
+
+        fca.refetchValues(x.address);
+      end
+      else
+      begin
+        OutputDebugString(fca.equation+' did not end up into an address');
+      end;
+    end;
+
+  except
+    on e: exception do
+      outputdebugstring('TDBVMWatchPollThread.addEntriesToList error: '+e.message);
+  end;
+end;
+
+procedure TDBVMWatchExecutePollThread.execute;
+var
+  i: integer;
+  size: integer;
+begin
+  cr3disassembler:=TCR3Disassembler.create;
+  getmem(results,4096);
+  resultsize:=4096;
+  zeromemory(results,resultsize);
+
+  try
+    while not terminated do
+    begin
+      size:=resultsize;
+      i:=dbvm_watch_retrievelog(id, results, size);
+      if i=0 then
+      begin
+        //OutputDebugString('TDBVMWatchExecutePollThread returned 0.  results^.numberOfEntries='+inttostr(results^.numberOfEntries));
+
+        //process data
+        if results^.numberOfEntries>0 then
+        begin
+          //OutputDebugString('calling addEntriesToList');
+          synchronize(addEntriesToList);
+          sleep(10);
+        end
+        else
+          sleep(50);
+      end
+      else
+      if i=2 then
+      begin
+        //not enough memory. Allocate twice the needed amount
+        outputdebugstring(inttostr(resultsize)+' is too small for the buffer. It needs to be at least '+inttostr(size));
+        freememandnil(results);
+
+
+        resultsize:=size*2;
+        getmem(results, resultsize);
+        zeromemory(results,resultsize);
+
+        continue; //try again, no sleep
+      end else
+      begin
+        outputdebugstring('dbvm_watch_retrievelog returned '+inttostr(i)+' which is not supported');
+        exit;
+      end;
+    end;
+  except
+    on e: exception do
+      outputdebugstring('TDBVMWatchExecutePollThread crash:'+e.Message);
+  end;
+
+  freememandnil(results);
+  freeandnil(cr3disassembler);
+end;
+{$ENDIF}
+
+//-----------------------------
 
 procedure TfrmChangedAddresses.AddRecord;
 var
@@ -159,7 +422,7 @@ begin
       if addresslist.GetData(address, x) then
       begin
         inc(x.count);
-        refetchValues(x.address);
+        refetchValues(x.address,true);
         exit;
       end;
 
@@ -169,22 +432,22 @@ begin
 
       if (foundcodedialog=nil) or (changedlist.Items.Count<8) then
       begin
-        li:=changedlist.Items.add;
-        li.caption:=s;
-        li.SubItems.Add('');
-        li.subitems.add('1');
-
-
         x:=TAddressEntry.create;
         x.context:=currentthread.context^;
         x.address:=address;
         x.count:=1;
         x.savestack;
-
-
-        li.Data:=x;
-
         addresslist.Add(address, x);
+
+        if checkFilter(x) then
+        begin
+          li:=changedlist.Items.add;
+          li.caption:=s;
+          li.SubItems.Add('');
+          li.subitems.add('1');
+          li.Data:=x;
+        end;
+
         refetchValues(x.address);
 
         if foundcodedialog<>nil then
@@ -204,6 +467,7 @@ var temp: dword;
     i: integer;
 
 begin
+  stopdbvmwatch;
 
   if OKButton.caption=rsStop then
   begin
@@ -463,6 +727,155 @@ begin
   list.free;
 end;
 
+procedure TfrmChangedAddresses.MenuItem3Click(Sender: TObject);
+var
+  i: integer;
+  a: ptruint;
+  value: string;
+
+  vartype: TVariableType;
+  ct: TCustomType;
+begin
+  value:='';
+  if changedlist.ItemIndex<>-1 then
+    value:=changedlist.Items[changedlist.ItemIndex].SubItems[0];
+
+  if InputQuery(rsValueChange, rsGiveTheNewValue, value)=false then exit;
+
+
+  for i:=0 to changedlist.Items.Count-1 do
+  begin
+    if changedlist.items[i].Selected then
+    begin
+      a:=symhandler.getAddressFromName(changedlist.items[i].Caption);
+
+      vartype:=vtDword;
+      ct:=nil;
+
+      ct:=TCustomType(cbDisplayType.Items.Objects[cbDisplayType.ItemIndex]);
+      if ct=nil then
+      begin
+        case cbDisplayType.ItemIndex of
+          0: vartype:=vtByte;
+          1: vartype:=vtWord;
+          3: vartype:=vtSingle;
+          4: vartype:=vtDouble;
+        end;
+      end
+      else
+        vartype:=vtCustom;
+
+      ParseStringAndWriteToAddress(value,a, vartype,false,ct);
+    end;
+  end;
+
+end;
+
+function TfrmChangedAddresses.checkFilter(entry: TaddressEntry): boolean;
+begin
+  if currentFilterFunc=-1 then exit(true);
+
+  LUA_SetCurrentContextState(0,@entry.context, filterExtraRegs);
+  lua_rawgeti(LuaVM, LUA_REGISTRYINDEX, currentFilterFunc);
+  if lua_pcall(LuaVM,0,1,0)=0 then
+  begin
+    result:=lua_toboolean(LuaVM,-1);
+    lua_pop(LuaVM,1);
+  end
+  else
+  begin
+    lua_settop(LuaVM,0);
+    result:=false;
+  end;
+
+end;
+
+procedure TfrmChangedAddresses.rebuildListWithFilter;
+var
+  mi: TMapIterator;
+  entry: TaddressEntry;
+  address: ptruint;
+  li: TListItem;
+begin
+  changedlist.Clear; //don't delete the data
+
+  mi:=tmapiterator.Create(addresslist);
+  mi.First;
+  while not mi.eom do
+  begin
+    mi.GetData(entry);
+
+    if checkFilter(entry) then
+    begin
+      mi.GetID(address);
+
+      li:=changedlist.Items.add;
+      li.caption:=inttohex(address,8);
+      li.SubItems.Add('');
+      li.subitems.add(inttostr(entry.count));
+      li.Data:=entry;
+    end;
+
+    mi.Next;
+  end;
+
+  refetchValues;
+end;
+
+
+procedure TfrmChangedAddresses.clearFilter;
+begin
+  if currentFilterFunc<>-1 then
+  begin
+    luaL_unref(luaVM, LUA_REGISTRYINDEX, currentFilterFunc);
+    currentFilterFunc:=-1;
+  end;
+  currentFilter:='';
+  miSetFilter.Caption:=rsFilter;
+end;
+
+procedure TfrmChangedAddresses.miSetFilterClick(Sender: TObject);
+var
+    f: string;
+    i: integer;
+begin
+  f:=currentFilter;
+  if InputQuery(rsFilter, rsEnterLuaFormula, f) then
+  begin
+    if trim(f)<>'' then
+    begin
+      //parse it
+      if luaL_loadstring(LuaVM,pchar('return '+f))=0 then
+      begin
+        clearfilter;
+
+        filterExtraRegs:=(pos('XMM',f)>0);
+        if filterExtraRegs=false then
+        begin
+          i:=pos('FP',f);
+          filterExtraRegs:=(i>0) and (i+2<=length(f)) and (f[i+2] in ['0'..'7']);
+        end;
+
+
+        currentFilterFunc:=luaL_ref(LuaVM,LUA_REGISTRYINDEX);
+        currentFilter:=f;
+
+        miSetFilter.Caption:=rsFilter+' : '+currentFilter;
+
+
+      end
+      else
+        MessageDlg('"'+f+'" is invalid',mtError,[mbOK],0);
+
+      lua_settop(LuaVM,0);
+    end
+    else
+      clearfilter;
+
+    rebuildlistwithfilter;
+  end;
+end;
+
 procedure TfrmChangedAddresses.miGroupClearClick(Sender: TObject);
 var
   i: integer;
@@ -661,7 +1074,7 @@ begin
     changedlist.Column[1].Width:=max(changedlist.Column[1].Width, canvas.TextWidth('9999999.999'));
     changedlist.Column[2].Width:=max(changedlist.Column[2].Width, canvas.TextWidth('999999'));
 
-    ClientWidth:=max(clientwidth, changedlist.Column[0].Width+changedlist.Column[1].Width+changedlist.Column[2].Width+20);
+    ClientWidth:=max(clientwidth, integer(changedlist.Column[0].Width+changedlist.Column[1].Width+changedlist.Column[2].Width+20));
     hassetsizes:=true;
   end;
 end;
@@ -703,13 +1116,14 @@ begin
   miDissect.enabled:=changedlist.SelCount>0;
 end;
 
-procedure TfrmChangedAddresses.refetchValues(specificaddress: ptruint=0);
+procedure TfrmChangedAddresses.refetchValues(specificaddress: ptruint=0; countonly: boolean=false);
 var i: integer;
     s: string;
     handled: boolean;
     startindex: integer;
     stopindex: integer;
 begin
+  s:='';
   if changedlist.Items.Count>0 then
   begin
     if Changedlist.TopItem=nil then exit;
@@ -723,18 +1137,21 @@ begin
       if (specificaddress<>0) and (TAddressEntry(changedlist.items[i].Data).address <> specificaddress) then //check if this is the line to update, if not, don't read and parse
         continue;
 
-
-      case cbDisplayType.ItemIndex of
-        0: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtByte,  nil, micbShowAsHexadecimal.checked);
-        1: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtWord,  nil, micbShowAsHexadecimal.checked);
-        2: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtDWord, nil, micbShowAsHexadecimal.checked);
-        3: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtSingle,nil, micbShowAsHexadecimal.checked);
-        4: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtDouble,nil, micbShowAsHexadecimal.checked);
-        else
-        begin
-          //custom type
-          s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtCustom, TCustomType(cbDisplayType.Items.Objects[cbDisplayType.ItemIndex]), micbShowAsHexadecimal.checked);
+      if countonly=false then
+      begin
+        case cbDisplayType.ItemIndex of
+          0: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtByte,  nil, micbShowAsHexadecimal.checked);
+          1: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtWord,  nil, micbShowAsHexadecimal.checked);
+          2: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtDWord, nil, micbShowAsHexadecimal.checked);
+          3: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtSingle,nil, micbShowAsHexadecimal.checked);
+          4: s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtDouble,nil, micbShowAsHexadecimal.checked);
+          else
+          begin
+            //custom type
+            s:=ReadAndParseAddress(TAddressEntry(changedlist.items[i].Data).address, vtCustom, TCustomType(cbDisplayType.Items.Objects[cbDisplayType.ItemIndex]), micbShowAsHexadecimal.checked);
+          end;
         end;
+
       end;
 
 
@@ -746,15 +1163,28 @@ begin
       changedlist.items[i].SubItems[1]:=inttostr(TAddressEntry(changedlist.items[i].Data).count);
 
 
-
-      Changedlist.Items[i].SubItems[0]:=s;
+      if countonly=false then
+        Changedlist.Items[i].SubItems[0]:=s;
     end;
   end;
 end;
 
 procedure TfrmChangedAddresses.Timer1Timer(Sender: TObject);
+var
+  c: integer;
+  s: string;
+
 begin
   refetchValues;
+  c:=changedlist.Items.Count;
+
+  if c=1 then
+    s:=rsCodeAccessesSingleAddress
+  else
+    s:=format(rsCodeAccessesAddresses, [c]);
+
+  lblInfo.caption:=s;
+
 end;
 
 procedure TfrmChangedAddresses.Showregisterstates1Click(Sender: TObject);
@@ -798,6 +1228,8 @@ var
   ae: TAddressEntry;
   x: array of integer;
 begin
+  stopDBVMWatch();
+
   for i:=0 to changedlist.Items.Count-1 do
   begin
     ae:=TAddressEntry(changedlist.Items[i].Data);
@@ -821,6 +1253,8 @@ procedure TfrmChangedAddresses.FormCreate(Sender: TObject);
 var x: array of integer;
     i: integer;
 begin
+  fdbvmwatchid:=-1;
+  currentFilterFunc:=-1;
   okbutton.caption:=rsStop;
 
   setlength(x, 0);
@@ -841,6 +1275,48 @@ begin
     cbDisplayType.Items.AddObject(TCustomType(customTypes[i]).name, customTypes[i]);
 
   addresslist:=TMap.Create(ituPtrSize,sizeof(pointer));
+end;
+
+procedure TfrmChangedAddresses.stopdbvmwatch;
+begin
+  {$IFDEF windows}
+  if dbvmwatchpollthread<>nil then
+  begin
+    dbvmwatchpollthread.Terminate;
+    dbvmwatchpollthread.WaitFor;
+    freeandnil(dbvmwatchpollthread);
+  end;
+
+  if dbvmwatchid<>-1 then
+  begin
+    dbvm_watch_delete(dbvmwatchid);
+    dbvmwatchid:=-1;
+  end;
+
+  if dbvmwatch_unlock<>0 then
+  begin
+    UnlockMemory(dbvmwatch_unlock);
+    dbvmwatch_unlock:=0;
+  end;
+  {$ENDIF}
+end;
+
+procedure TfrmChangedAddresses.setdbvmwatchid(id: integer);
+begin
+  {$IFDEF windows}
+  fdbvmwatchid:=id;
+
+  if id<>-1 then
+  begin
+    if dbvmwatchpollthread<>nil then
+      freeandnil(dbvmwatchpollthread);
+
+    dbvmwatchpollthread:=TDBVMWatchExecutePollThread.Create(true);
+    dbvmwatchpollthread.id:=id;
+    dbvmwatchpollthread.fca:=self;
+    dbvmwatchpollthread.Start;
+  end;
+  {$ENDIF}
 end;
 
 initialization

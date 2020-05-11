@@ -4,6 +4,8 @@ unit BetterDLLSearchPath;
 
 interface
 
+{$ifdef windows}
+
 uses
   windows, sysutils;
 
@@ -15,8 +17,11 @@ var
   AddDllDirectory: function(dir: PWideChar):pointer; stdcall;
   SetDefaultDllDirectories: function(v: dword):BOOL; stdcall;
 
+{$endif}
+
 implementation
 
+{$ifdef windows}
 function AddDllDirectoryNI(dir: PWideChar):pointer; stdcall;
 begin
   result:=nil;
@@ -41,6 +46,7 @@ begin
   else
     SetDefaultDllDirectories:=@SetDefaultDllDirectoriesNI;
 
+{$warn 4104 off}
   if assigned(AddDllDirectory) then
   begin
 {$ifdef cpu32}
@@ -52,10 +58,13 @@ begin
   end
   else
     AddDllDirectory:=@AddDllDirectoryNI;
+{$warn 4104 on}
 end;
 
 initialization
   BetterDLLSearchPathInit;
+
+{$endif}
 
 end.
 

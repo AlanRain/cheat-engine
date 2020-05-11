@@ -20,18 +20,22 @@ type
     cbWholePage: TCheckBox;
     cbSaveFPU: TCheckBox;
     cbSaveStack: TCheckBox;
+    edtPhysicalAddress: TEdit;
     edtMaxEntries: TEdit;
-    GroupBox1: TGroupBox;
+    gbAccessType: TGroupBox;
     lblPhysicalAddress: TLabel;
     lblVirtualAddress: TLabel;
     Label3: TLabel;
     Panel1: TPanel;
     Panel2: TPanel;
+    Panel3: TPanel;
+    rbExecuteAccess: TRadioButton;
     rbWriteAccess: TRadioButton;
     rbReadAccess: TRadioButton;
     procedure btnOKClick(Sender: TObject);
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+    procedure lblPhysicalAddressClick(Sender: TObject);
   private
     { private declarations }
     fAddress: qword;
@@ -62,7 +66,7 @@ implementation
 
 {$R *.lfm}
 
-uses math,NewKernelHandler, ProcessHandlerUnit, vmxfunctions, registry;
+uses math,NewKernelHandler, ProcessHandlerUnit, vmxfunctions, registry{$ifdef darwin},macport{$endif};
 
 function TfrmDBVMWatchConfig.getMaxEntries: integer;
 begin
@@ -103,20 +107,35 @@ end;
 
 function TfrmDBVMWatchConfig.getWatchType: integer;
 begin
-  if rbReadAccess.checked then result:=1 else result:=0;
+  result:=0;
+
+  if rbWriteAccess.checked then result:=0 else
+  if rbReadAccess.checked then result:=1 else
+  if rbExecuteAccess.checked then result:=2;
 end;
 
 procedure TfrmDBVMWatchConfig.setWatchType(t:integer);
 begin
-  if t=0 then
-    rbWriteAccess.checked:=true
-  else
-    rbReadAccess.checked:=true;
+  case t of
+    0: rbWriteAccess.checked:=true;
+    1: rbReadAccess.checked:=true;
+    2: rbExecuteAccess.Checked:=true;
+  end;
 end;
 
 procedure TfrmDBVMWatchConfig.btnOKClick(Sender: TObject);
 var i: integer;
 begin
+  if edtPhysicalAddress.visible then
+  begin
+    try
+      fPhysicalAddress:=strtoint64('$'+edtPhysicalAddress.Text);
+    except
+      messagedlg('The provided physical address '+edtPhysicalAddress.text+' is invalid', mtError,[mbok],0);
+      exit;
+    end;
+  end;
+
   if TryStrToInt(edtMaxEntries.text,i) then
     modalresult:=mrok
   else
@@ -144,6 +163,9 @@ begin
       if reg.ValueExists('Log Stack') then cbSaveStack.checked:=reg.ReadBool('Log Stack');
       if reg.ValueExists('Multiple matching RIP') then cbMultipleRIP.checked:=reg.ReadBool('Multiple matching RIP');
       if reg.ValueExists('Max number of entries') then edtMaxEntries.text:=inttostr(reg.ReadInteger('Max number of entries'));
+      if reg.ValueExists('Log whole page') then cbWholePage.checked:=reg.ReadBool('Log whole page');
+
+      if reg.ValueExists('Watchtype') then Watchtype:=reg.ReadInteger('Watchtype');
     end;
 
 
@@ -168,30 +190,45 @@ begin
       reg.writeBool('Log FPU', cbSaveFPU.checked);
       reg.writeBool('Log Stack', cbSaveStack.checked);
       reg.writeBool('Multiple matching RIP', cbMultipleRIP.checked);
+      reg.writeBool('Log whole page', cbWholePage.checked);
 
       if TryStrToInt(edtMaxEntries.text, max) then
          reg.WriteInteger('Max number of entries', max);
+
+      reg.writeInteger('Watchtype', WatchType);
     end;
   finally
     reg.free;
   end;
 end;
 
+procedure TfrmDBVMWatchConfig.lblPhysicalAddressClick(Sender: TObject);
+begin
+
+end;
+
 procedure TfrmDBVMWatchConfig.setAddress(a: qword);
 var
   x: ptruint;
-  temp: byte;
+  temp: dword;
+  s: string;
 begin
+  {$ifdef windows}
   faddress:=a;
   lblVirtualAddress.caption:=format('Virtual Address=%.8x',[a]);
+
 
   if ReadProcessMemory(processhandle, pointer(a),@temp,1,x) then
   begin
     if GetPhysicalAddress(processhandle, pointer(a), fPhysicalAddress) then
+      lblPhysicalAddress.caption:=format('Physical Address=%.8x',[fPhysicalAddress])
+    else
     begin
-      lblPhysicalAddress.caption:=format('Physical Address=%.8x',[fPhysicalAddress]);
-      btnOK.Enabled:=true;
+      edtPhysicalAddress.visible:=true;
+      cbLockPage.enabled:=false;
     end;
+
+    btnOK.Enabled:=true;
   end;
 
   if btnok.enabled=false then
@@ -199,6 +236,7 @@ begin
     lblPhysicalAddress.caption:='Physical Address=invalid';
     lblPhysicalAddress.font.color:=clRed;
   end;
+  {$endif}
 end;
 
 end.

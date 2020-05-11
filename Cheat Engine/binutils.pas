@@ -3,11 +3,14 @@ unit binutils;
 //responsible for launching and retrieving data from the binutil tools
 
 {$mode objfpc}{$H+}
+{$warn 2005 off}
 
 interface
 
 uses
-  windows, newkernelhandler, forms, Classes, SysUtils, process, LastDisassembleData, strutils, maps;
+  {$ifdef darwin}macport,{$endif}
+  {$ifdef windows}windows, {$endif}
+  newkernelhandler, forms, Classes, SysUtils, process, LastDisassembleData, strutils, maps;
 
 type
   TSection=record
@@ -343,15 +346,19 @@ begin
       setlength(params, p.parameters.Count);
       for i:=0 to p.parameters.count-1 do
         params[i]:=p.Parameters[i];
-
-      {$IF (FPC_FULLVERSION<0304000)}
-      if RunCommand(p.Executable, params, os) then
-      {$else}
+        
       if RunCommand(p.Executable, params, os,[poNoConsole]) then
-      {$endif}
       begin
         output:=TStringStream.create('');
         output.WriteString(os);
+      end
+      else
+      begin
+        //failure to run
+        ldd.opcode:='Invalid';
+        ldd.parameters:='binutils';
+        setlength(ldd.bytes,0);
+        exit;
       end;
 
 {

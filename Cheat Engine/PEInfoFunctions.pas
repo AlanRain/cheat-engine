@@ -6,9 +6,15 @@ unit PEInfoFunctions;
 This unit will contain all functions used for PE-header inspection
 }
 
+{$warn 4056 off}
+
 interface
 
-uses windows, LCLIntf,SysUtils,classes, CEFuncProc,NewKernelHandler,filemapping, commonTypeDefs;
+uses
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf,SysUtils,classes, CEFuncProc,NewKernelHandler,filemapping, commonTypeDefs;
 
 
 const
@@ -82,6 +88,7 @@ const
 
 
 
+  {$ifdef windows}
 type
   _IMAGE_OPTIONAL_HEADER64 = packed record
     { Standard fields. }
@@ -121,7 +128,6 @@ type
   TImageOptionalHeader64 = _IMAGE_OPTIONAL_HEADER64;
   IMAGE_OPTIONAL_HEADER64 = _IMAGE_OPTIONAL_HEADER64;
   PImageOptionalHeader64 = ^TImageOptionalHeader64;
-
 
 
 type PUINT64=^UINT64;
@@ -227,11 +233,108 @@ TImageDosHeader = _IMAGE_DOS_HEADER;
 IMAGE_DOS_HEADER = _IMAGE_DOS_HEADER;
 
 
+(*
+typedef struct IMAGE_COR20_HEADER
+{
+    // Header versioning
+    DWORD                   cb;
+    WORD                    MajorRuntimeVersion;
+    WORD                    MinorRuntimeVersion;
+
+    // Symbol table and startup information
+    IMAGE_DATA_DIRECTORY    MetaData;
+    DWORD                   Flags;
+
+    // If COMIMAGE_FLAGS_NATIVE_ENTRYPOINT is not set, EntryPointToken represents a managed entrypoint.
+    // If COMIMAGE_FLAGS_NATIVE_ENTRYPOINT is set, EntryPointRVA represents an RVA to a native entrypoint.
+    union {
+        DWORD               EntryPointToken;
+        DWORD               EntryPointRVA;
+    } DUMMYUNIONNAME;
+
+    // Binding information
+    IMAGE_DATA_DIRECTORY    Resources;
+    IMAGE_DATA_DIRECTORY    StrongNameSignature;
+
+    // Regular fixup and binding information
+    IMAGE_DATA_DIRECTORY    CodeManagerTable;
+    IMAGE_DATA_DIRECTORY    VTableFixups;
+    IMAGE_DATA_DIRECTORY    ExportAddressTableJumps;
+
+    // Precompiled image info (internal use only - set to zero)
+    IMAGE_DATA_DIRECTORY    ManagedNativeHeader;
+
+} IMAGE_COR20_HEADER, *PIMAGE_COR20_HEADER;
+
+*)
+TImageCLRRuntimeDirectory=record
+  cb: DWORD;
+  MajorRuntimeVersion: WORD;
+  MinorRuntimeVersion: WORD;
+  MetaData: IMAGE_DATA_DIRECTORY;
+  Flags: DWORD;
+  EntryPointTokenOrRVA: DWORD;
+  Resources: IMAGE_DATA_DIRECTORY;
+  StrongNameSignature: IMAGE_DATA_DIRECTORY;
+  CodeManagerTable: IMAGE_DATA_DIRECTORY;
+  VTableFixups: IMAGE_DATA_DIRECTORY;
+  ExportAddressTableJumps: IMAGE_DATA_DIRECTORY;
+  ManagedNativeHeader: IMAGE_DATA_DIRECTORY;
+end;
+
+PImageCLRRuntimeDirectory=^TImageCLRRuntimeDirectory;
+
+
+type
+  TRunTimeEntry=packed record
+    start: dword;
+    stop: dword;
+    unwind: dword;
+  end;
+  PRuntimeEntry=^TRunTimeEntry;
+
+  TRunTimeList=array [0..10000] of TRunTimeEntry;
+  PRuntimeList=^TRuntimeList;
+
+  TExceptionList=class
+  private
+    fmodulebase: ptruint;
+    exceptionAddress: ptruint;
+    size: integer;
+
+
+    list: PRuntimeList;
+    function getEntry(index: integer): TRunTimeEntry;
+    function getCount: integer;
+  public
+    function getRunTimeEntry(address: ptruint): PRuntimeEntry;
+    constructor create(modulebase: ptruint; ela: ptruint; els: integer);
+    destructor destroy; override;
+    property ModuleBase: ptruint read fModuleBase;
+    property Count: integer read getCount;
+    property Entry[index: integer]: TRunTimeEntry read getEntry; default;
+
+
+  end;
+
+
+
 function peinfo_getImageNtHeaders(headerbase: pointer; maxsize: dword):PImageNtHeaders;
-function peinfo_getExportList(filename: string; dllList: Tstrings): boolean;
+function peinfo_getExportList(filename: string; dllList: Tstrings): boolean; overload;
+function peinfo_getExportList(modulebase: ptruint; dllList: Tstrings): boolean; overload;
 function peinfo_is64bitfile(filename: string; var is64bit: boolean): boolean;
+function peinfo_isdotnetfile(filename: string; var isdotnet: boolean): boolean;
+function peinfo_getimagesizefromfile(filename: string; var size: dword): boolean;
+
+function peinfo_getExceptionList(modulebase: ptruint): TExceptionList;
+     {$endif}
+
 
 implementation
+
+{$ifdef windows}
+uses ProcessHandlerUnit;
+
 
 function peinfo_getImageDosHeader(headerbase: pointer):PImageDosHeader;
 {
@@ -325,6 +428,171 @@ resourcestring
   strInvalidFile='Invalid file';
   rsPEIFNoExports = 'No exports';
 
+
+function TExceptionList.getRunTimeEntry(address: ptruint): PRunTimeEntry;
+var
+  i, count: integer;
+begin
+  //todo: use a sorted scan
+  result:=nil;
+  count:=size div 12;
+
+  address:=address-ModuleBase;
+
+  for i:=0 to count-1 do
+  begin
+    if InRangeQ(address, list^[i].start, list^[i].stop-1) then
+      exit(@list^[i]);
+  end;
+end;
+
+
+function TExceptionList.getEntry(index: integer): TRunTimeEntry;
+begin
+  if index<count then
+    result:=list[index]
+  else
+    raise exception.create('Invalid index');
+end;
+
+function TExceptionList.getCount: integer;
+begin
+  result:=size div 12;
+end;
+
+constructor TExceptionList.create(modulebase: ptruint; ela: ptruint; els: integer);
+var br: ptruint;
+begin
+  fmodulebase:=modulebase;
+  exceptionAddress:=ela;
+  size:=els;
+
+  getmem(list,size);
+
+  readprocessmemory(processhandle, pointer(modulebase+exceptionAddress), list, size,br);
+
+  size:=br;
+end;
+
+destructor TExceptionList.destroy;
+begin
+  freemem(list);
+  inherited destroy;
+end;
+
+function peinfo_getExceptionList(modulebase: ptruint): TExceptionList;
+var
+  ar: ptruint;
+  header: pointer;
+  ImageNtHeader: PImageNtHeaders;
+  OptionalHeader: PImageOptionalHeader;
+  OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
+  is64bit: boolean;
+begin
+  result:=nil;
+  getmem(header, 8192);
+  try
+    if readProcessMemory(processhandle, pointer(modulebase),header, 8192, ar)=false then exit;
+    ImageNtHeader:=peinfo_getImageNtHeaders(header, 8192);
+    if ImageNTHeader=nil then exit;
+    is64bit:=ImageNTHeader^.FileHeader.Machine=$8664;
+
+    if is64bit=false then exit;
+
+
+    OptionalHeader:=peinfo_getOptionalHeaders(header, 8192);
+    if OptionalHeader=nil then exit;
+
+    if OptionalHeader64^.DataDirectory[3].VirtualAddress<>0 then
+      result:=TExceptionList.Create(modulebase, OptionalHeader64^.DataDirectory[3].VirtualAddress, OptionalHeader64^.DataDirectory[3].Size);
+
+  finally
+    freemem(header);
+  end;
+end;
+
+function peinfo_getExportList(modulebase: ptruint; dllList: Tstrings): boolean;
+var
+    header: pointer;
+    ImageNtHeader: PImageNtHeaders;
+    OptionalHeader: PImageOptionalHeader;
+    OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
+    ImageExportDirectory: PImageExportDirectory;
+    is64bit: boolean;
+
+    addresslist: PDwordArray;
+    exportlist: PDwordArray;
+    functionname: pchar;
+    i: integer;
+    ar:ptruint;
+
+    imagesize: dword;
+begin
+  result:=false;
+
+  getmem(header, 4096);
+  try
+    if readProcessMemory(processhandle, pointer(modulebase),header, 4096, ar)=false then raise exception.create('Invalid memory address');
+
+    ImageNtHeader:=peinfo_getImageNtHeaders(header, 4096);
+    if ImageNTHeader=nil then raise exception.create(strInvalidFile);
+    is64bit:=ImageNTHeader^.FileHeader.Machine=$8664;
+
+    OptionalHeader:=peinfo_getOptionalHeaders(header, 4096);
+    if OptionalHeader=nil then raise exception.create(strInvalidFile);
+
+    imagesize:=OptionalHeader.SizeOfImage;
+    freemem(header);
+    getmem(header,imagesize);
+    ar:=0;
+    if readProcessMemory(processhandle, pointer(modulebase),header, imagesize, ar)=false then
+    begin
+      imagesize:=ar;
+      if imagesize=0 then raise exception.create('Invalid header');
+    end;
+
+    ImageNtHeader:=peinfo_getImageNtHeaders(header, imagesize);
+    OptionalHeader:=peinfo_getOptionalHeaders(header, imagesize);
+
+
+
+    if ImageNTHeader=nil then raise exception.Create(strInvalidFile);
+    if OptionalHeader=nil then raise exception.Create(strInvalidFile);
+
+    if is64bit then
+      ImageExportDirectory:=PImageExportDirectory(ptruint(header)+OptionalHeader64^.DataDirectory[0].VirtualAddress)
+    else
+      ImageExportDirectory:=PImageExportDirectory(ptruint(header)+OptionalHeader^.DataDirectory[0].VirtualAddress);
+
+
+    if (ptruint(ImageExportDirectory)<=ptruint(header)) or (ptruint(ImageExportDirectory)>=(ptruint(header)+imagesize)) then
+      raise exception.create(rsPEIFNoExports);
+
+    exportlist:=PDWordArray(ptruint(header)+dword(ImageExportDirectory^.AddressOfNames));
+    addresslist:=PDWordArray(ptruint(header)+dword(ImageExportDirectory^.AddressOfFunctions));
+
+    if (ptruint(exportlist)<=ptruint(header)) or (ptruint(exportlist)>=(ptruint(header)+imagesize)) then
+      raise exception.create(rsPEIFNoExports);
+
+    if (ptruint(addresslist)<=ptruint(header)) or (ptruint(addresslist)>=(ptruint(header)+imagesize)) then
+      raise exception.create(rsPEIFNoExports);
+
+
+    for i:=0 to ImageExportDirectory.NumberOfNames-1 do
+    begin
+      functionname:=pchar(ptruint(header)+exportlist[i]);
+
+      if functionname<>nil then
+        dllList.AddObject(functionname, pointer(ptruint(modulebase+addresslist[i])));
+    end;
+    result:=true;
+  finally
+    if header<>nil then
+      freemem(header);
+  end;
+end;
+
+
 function peinfo_getExportList(filename: string; dllList: Tstrings): boolean;
 var fmap: TFileMapping;
     header: pointer;
@@ -338,6 +606,8 @@ var fmap: TFileMapping;
     exportlist: PDwordArray;
     functionname: pchar;
     i: integer;
+
+    ordinaloffset: integer;
 
    // a: dword;
 begin
@@ -370,20 +640,28 @@ begin
       else
         ImageExportDirectory:=peinfo_VirtualAddressToFileAddress(header, fmap.filesize, OptionalHeader^.DataDirectory[0].VirtualAddress);
 
-      if ImageExportDirectory=nil then raise exception.Create(strInvalidFile);
+      if ImageExportDirectory=nil then raise exception.Create(rsPEIFNoExports);
 
       exportlist:=peinfo_VirtualAddressToFileAddress(header,fmap.filesize, dword(ImageExportDirectory.AddressOfNames));
       addresslist:=peinfo_VirtualAddressToFileAddress(header,fmap.filesize, dword(ImageExportDirectory.AddressOfFunctions));
 
       if exportlist=nil then raise exception.Create(rsPEIFNoExports);
 
+      if ImageExportDirectory.NumberOfFunctions>ImageExportDirectory.NumberOfNames then
+      begin
+        ordinaloffset:=ImageExportDirectory.NumberOfFunctions-ImageExportDirectory.NumberOfNames;
+        for i:=0 to ordinaloffset-1 do
+          dllList.AddObject('Ordinal'+inttostr(ImageExportDirectory.Base+i), pointer(ptruint(addresslist[i])));
+      end
+      else
+        ordinaloffset:=0;
+
       for i:=0 to ImageExportDirectory.NumberOfNames-1 do
       begin
         functionname:=peinfo_VirtualAddressToFileAddress(header,fmap.filesize, exportlist[i]);
 
-
         if functionname<>nil then
-          dllList.AddObject(functionname, pointer(ptruint(addresslist[i])));
+          dllList.AddObject(functionname, pointer(ptruint(addresslist[ordinaloffset+i])));
       end;
       result:=true;
 
@@ -394,14 +672,90 @@ begin
   end;
 end;
 
+function peinfo_getimagesizefromfile(filename: string; var size: dword): boolean;
+var
+  fmap: TFileMapping;
+  header: pointer;
+  ImageNtHeader: PImageNtHeaders;
+  OptionalHeader: PImageOptionalHeader;
+  OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
+begin
+  result:=false;
+
+  try
+    fmap:=TFileMapping.create(filename);
+    if fmap<>nil then
+    begin
+      try
+        header:=fmap.fileContent;
+        ImageNtHeader:=peinfo_getImageNtHeaders(header,fmap.filesize);
+        OptionalHeader:=peinfo_getOptionalHeaders(header,fmap.filesize);
+        if ImageNTHeader=nil then raise exception.Create(strInvalidFile);
+        if ImageNTHeader^.FileHeader.Machine=$8664 then
+          size:=OptionalHeader64.SizeOfImage
+        else
+          size:=OptionalHeader.SizeOfImage;
+
+        result:=true; //success
+      finally
+        fmap.free;
+      end;
+
+    end;
+  except
+
+  end;
+end;
+
+function peinfo_isdotnetfile(filename: string; var isdotnet: boolean): boolean;
+var fmap: TFileMapping;
+    header: pointer;
+    OptionalHeader: PImageOptionalHeader;
+    OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
+    is64bit: boolean;
+    ImageNtHeader: PImageNtHeaders;
+    netdata: dword;
+begin
+  result:=false;
+
+  try
+    fmap:=TFileMapping.create(filename);
+    if fmap<>nil then
+    begin
+      try
+        header:=fmap.fileContent;
+        ImageNtHeader:=peinfo_getImageNtHeaders(header,fmap.filesize);
+        if ImageNTHeader=nil then raise exception.Create(strInvalidFile);
+        if ImageNTHeader^.FileHeader.Machine=$8664 then
+          is64bit:=true
+        else
+          is64bit:=false;
+
+        OptionalHeader:=peinfo_getOptionalHeaders(header,fmap.filesize);
+        if OptionalHeader<>nil then
+        begin
+          if is64bit then
+            netdata:=OptionalHeader64.DataDirectory[14].Size
+          else
+            netdata:=OptionalHeader.DataDirectory[14].Size;
+
+          isdotnet:=netdata<>0;
+          result:=true;
+        end;
+      finally
+        fmap.free;
+      end;
+
+    end;
+  except
+
+  end;
+end;
+
 function peinfo_is64bitfile(filename: string; var is64bit: boolean): boolean;
 var fmap: TFileMapping;
     header: pointer;
     ImageNtHeader: PImageNtHeaders;
-    OptionalHeader: PImageOptionalHeader;
-    OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
-
-   // a: dword;
 begin
   //open the file
   //parse the header
@@ -435,6 +789,8 @@ begin
 
   end;
 end;
+
+{$endif}
 
 
 end.

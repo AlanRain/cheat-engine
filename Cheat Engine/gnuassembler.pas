@@ -5,7 +5,13 @@ unit GnuAssembler;
 interface
 
 uses
-  windows, Classes, SysUtils, NewKernelHandler, ProcessHandlerUnit, strutils,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, NewKernelHandler, ProcessHandlerUnit, strutils,
   dialogs, commonTypeDefs;
 
 {
@@ -60,7 +66,7 @@ procedure gnuassemble(originalscript: tstrings);
 implementation
 
 uses simpleaobscanner, symbolhandler, binutils, elftypes, elfconsts, MemoryQuery,
-  globals;
+  globals, UnexpectedExceptionsHelper;
 
 resourcestring
   rsInvalidELFFile = 'Invalid ELF file';
@@ -478,6 +484,9 @@ begin
             sections[i].address:=ptrUint(virtualallocex(processhandle,nil,sections[i].actualsize+1024, MEM_RESERVE or MEM_COMMIT,page_execute_readwrite))
           else //allocate this memory at the given address
             sections[i].address:=ptrUint(virtualallocex(processhandle,FindFreeBlockForRegion(sections[i].address,sections[i].actualsize+1024),sections[i].actualsize+1024, MEM_RESERVE or MEM_COMMIT,page_execute_readwrite));
+
+          if allocsAddToUnexpectedExceptionList then
+            AddUnexpectedExceptionRegion(sections[i].address, sections[i].actualsize+1024);
         end;
       end;
 

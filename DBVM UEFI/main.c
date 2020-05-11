@@ -10,6 +10,7 @@
 #include <efilib.h>
 #include "helpers.h"
 #include "dbvmoffload.h"
+#include "mpService.h"
 
 EFI_SYSTEM_TABLE *st;
 EFI_BOOT_SERVICES *bs;
@@ -17,6 +18,8 @@ EFI_RUNTIME_SERVICES *rs;
 EFI_LOAD_FILE_INTERFACE *file;
 
 EFI_GUID fileprotocol=LOAD_FILE_PROTOCOL;
+
+UINTN cpucount=0;
 
 
 EFI_STATUS OpenProtocol(
@@ -120,8 +123,59 @@ inline uint64_t rdmsr(uint32_t msr_id)
     return msr_value;
 }*/
 
+EFIAPI VOID FunctionX (IN VOID *Buffer)
+{
+  UINT64 t1,t2,t3, a;
+  t1=getTSC();
+  t2=readMSR(0x10);
+  t3=getTSC();
+  a=readMSR(0x3b);
+  Print(L"AP CPU %d:\n      %ld - %ld - %ld\n      Adjust:%ld\n", (int)Buffer, t1,t2,t3, a);
+
+  writeMSR(0x3b,-getTSC());
+
+  t1=getTSC();
+  t2=readMSR(0x10);
+  t3=getTSC();
+  a=readMSR(0x3b);
+
+  Print(L"AP CPU %d:\n      %ld - %ld - %ld\n      Adjust:%ld\n", (int)Buffer, t1,t2,t3, a);
+}
+
+
+EFIAPI VOID LaunchDBVMAP (IN VOID *Buffer)
+{
+  writeMSR(0x3b,0);
+  Print(L"AP CPU %d entering DBVM mode\n", (int)Buffer);
+
+  Print(L"CR0 before = 0x%lx\n", getCR0());
+  LaunchDBVM();
+  Print(L"CR0 after = 0x%lx\n", getCR0());
+
+  Print(L"AP CPU %d is alive\n", (int)Buffer);
+}
+
+void enableSerial(void);
+void sendchar32(char x);
+
+
+unsigned char inportb(unsigned int port)
+{
+   unsigned char ret;
+   asm volatile ("inb %%dx,%%al":"=a" (ret):"d" (port));
+   return ret & 0xff;
+}
+
+void outportb(unsigned int port,unsigned char value)
+{
+   asm volatile ("outb %%al,%%dx": :"d" (port), "a" (value));
+}
+
+
+extern int SerialPort;
+
 EFI_STATUS
-EFIAPI
+//EFIAPI //Not with GNU_EFI_USE_MS_ABI enabled we are
 efi_main (EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 {
 
@@ -130,12 +184,141 @@ efi_main (EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
   //UINT64 c=testfunction();
   EFI_STATUS s;
+  int i;
 
   InitializeLib(ImageHandle, SystemTable);
   initFunctions(ImageHandle, SystemTable);
 
+  UINT64 tx[5];
+
+
+
+
 
   Print(L"efi_main at %lx\n",(UINT64)efi_main);
+  FunctionX(NULL);
+/*
+  Print(L"Testing 2:\n");
+
+  int counter=0;
+
+  for (i=7; i<0x10000; i+=8)
+  {
+	  outportb(i,0xce);
+	  if (inportb(i)==0xce)
+	  {
+		  counter++;
+		  Print(L"%d: Correct at %x: ",counter, i);
+
+		  if (counter>0)
+		  {
+
+			  //SerialPort=i-7;
+
+			 // Print(L"a");
+			  //enableSerial();
+
+			  //int j;
+			  //Print(L"b");
+			  //for (j=0; j<10; j++)
+			  //{
+			//	  Print(L"c");
+			//	  sendchar32('a'+counter);
+			//	  Print(L"d");
+			 // }
+		  }
+
+		  Print(L"\n");
+	  }
+
+  }
+
+  Print(L"Done testing");
+
+  outportb(0x80,0xce);
+
+
+  SerialPort=0xff10;
+  enableSerial();
+  while (1)
+	  sendchar32('x');
+
+  outportb(0x80,0xcd);
+*/
+
+  tx[0]=0;
+  tx[1]=0;
+  tx[2]=0;
+  tx[3]=0;
+  tx[4]=0;
+
+  timeCheck(tx);
+
+  {
+    int i;
+
+    for (i=0; i<5; i++)
+    {
+      int delta;
+      if (i>0)
+      {
+        delta=tx[i]-tx[i-1];
+        Print(L"tx[%d]=%ld  (delta=%d)\n", i, tx[i], delta);
+      }
+      else
+        Print(L"tx[%d]=%ld\n", i, tx[i]);
+    }
+    int avg=(tx[4]-tx[0]) / 5;
+    Print(L"Avg time=%d\n", avg);
+  }
+
+
+
+  Input(L"Type something : ", something, 200);
+
+
+  EFI_MP_SERVICES_PROTOCOL *MpProto=NULL;
+  EFI_GUID z=EFI_MP_SERVICES_PROTOCOL_GUID;
+
+  s=LocateProtocol(&z, NULL, (void *)&MpProto);
+
+  if(EFI_ERROR(s)){Print(L"Unable to locate the MpService protocol:%r\n",s);}
+
+  Print(L"MpProto=%lx\n", (UINT64)MpProto);
+
+  if (MpProto)
+  {
+    UINTN NumEnabled;
+
+    //s=uefi_call_wrapper(MpProto->GetNumberOfProcessors,3,MpProto,&NumProc,&NumEnabled);
+    s=MpProto->GetNumberOfProcessors(MpProto,&cpucount,&NumEnabled);
+    if(EFI_ERROR(s))
+    {
+      Print(L"Unable to get the number of processors:%r\n",s);
+    }
+    else
+    {
+      Print(L"%d Processors of which %d are enabled\n", cpucount, NumEnabled);
+      /*
+      int i;
+      for (i=1; i<cpucount; i++)
+      {
+        s=MpProto->StartupThisAP(MpProto, FunctionX,i,NULL,0,(void*)(uintptr_t)i,NULL);
+        if(EFI_ERROR(s))
+        {
+          Print(L"%d Failed to launch AP:%r\n",i,s);
+        }
+      }*/
+
+
+    }
+  }
+
+  Input(L"Type something : ", something, 200);
+
+
+
+
 
   //s=SystemTable->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 4, &pa);
   s=AllocatePages(AllocateAnyPages,EfiRuntimeServicesCode,1024,&dbvmimage); //4MB
@@ -223,7 +406,6 @@ efi_main (EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
 
   UINT64 base=(UINT64)dbvmimage; //filepath;
-  int i;
   for (i=0; i<128; i++)
   {
     Print(L"%x ",*(unsigned char *)(base+i));
@@ -280,10 +462,37 @@ efi_main (EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
   if (StrnCmp(something,L"Q",2)!=0)
   {
     Print(L"launching DBVM\n");
+
+    writeMSR(0x3b,0);
+
+    setCR0(getCR0() | (1 << 5));
+    Print(L"WEEE\n");
+    Print(L"CR0 before = 0x%lx\n", getCR0());
     LaunchDBVM();
+    Print(L"CR0 after = 0x%lx\n", getCR0());
+
+    Print(L"Main DBVM CPU loaded. Loading AP cpu\'s:");
+
+    Input(L"Type something : ", something, 200);
+
+
+    int i;
+
+    //cpucount=1; //test while I fix something
+
+    for (i=1; i<cpucount; i++)
+    {
+      s=MpProto->StartupThisAP(MpProto, LaunchDBVMAP,i,NULL,0,(void*)(uintptr_t)i,NULL);
+      if(EFI_ERROR(s))
+      {
+        Print(L"Failed to launch CPU %d (%r)\n",i,s);
+      }
+    }
+
   }
 
 
+  Input(L"Type something : ", something, 200);
 
   Print(L"Something is %S", something);
 

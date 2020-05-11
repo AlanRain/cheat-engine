@@ -149,7 +149,7 @@ function lua_getProperty(L: PLua_state): integer; cdecl;
 var parameters: integer;
   c,c2: tobject;
   t: ptruint;
-  p: string;
+  p,v: string;
 
 
   svalue: string;
@@ -158,6 +158,7 @@ var parameters: integer;
 
   pinfo: PPropInfo;
   m: tmethod;
+  kind: TTypeKind;
 begin
   result:=0;
   parameters:=lua_gettop(L);
@@ -193,15 +194,19 @@ begin
                          tkDynArray,tkInterfaceRaw,tkProcVar,tkUString,tkUChar,
                          tkHelper
       }
-
-      case pinfo.PropType.Kind of
+      kind:=pinfo^.PropType.Kind;
+      case kind of
         tkInteger,tkInt64,tkQWord: lua_pushinteger(L, GetPropValue(c, p,false));
         tkBool: lua_pushboolean(L, GetPropValue(c, p, false));
         tkFloat: lua_pushnumber(L, GetPropValue(c, p, false));
         tkClass, tkObject: luaclass_newClass(L, GetObjectProp(c, p));
         tkMethod: LuaCaller_pushMethodProperty(L, GetMethodProp(c,p), pinfo.PropType.Name);
         tkSet: lua_pushstring(L, GetSetProp(c, pinfo, true));
-        else lua_pushstring(L, GetPropValue(c, p,true));
+        else
+        begin
+          v:=GetPropValue(c, p,true);
+          lua_pushstring(L, v);
+        end;
       end;
     end
     else

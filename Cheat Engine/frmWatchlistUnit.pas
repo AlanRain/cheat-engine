@@ -7,13 +7,14 @@ interface
 uses
   Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, ValEdit,
   ExtCtrls, ComCtrls, Menus, Clipbrd, NewKernelHandler, commonTypeDefs,strutils,
-  ProcessHandlerUnit, byteinterpreter;
+  ProcessHandlerUnit, byteinterpreter{$ifdef darwin},macport, mactypes{$endif};
 
 type
 
   { TfrmWatchlist }
 
   TfrmWatchlist = class(TForm)
+    wlImageList: TImageList;
     lvWatchlist: TListView;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
@@ -176,7 +177,7 @@ end;
 
 procedure TfrmWatchlist.MenuItem4Click(Sender: TObject);
 var
-  a: integer;
+  a: ptruint;
   e: boolean;
 
 begin

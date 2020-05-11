@@ -5,7 +5,7 @@ unit symbolconfigunit;
 interface
 
 uses
-  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  LCLIntf, Messages, LMessages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls,symbolhandler, symbolhandlerstructs, ComCtrls, ExtCtrls,
   Menus, LResources;
 
@@ -15,6 +15,7 @@ type
 
   TfrmSymbolhandler = class(TForm)
     edtSymbolname: TEdit;
+    scImageList: TImageList;
     Label3: TLabel;
     MenuItem1: TMenuItem;
     Panel1: TPanel;

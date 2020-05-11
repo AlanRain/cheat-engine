@@ -24,6 +24,7 @@ var AddVectoredExceptionHandler: function (FirstHandler: Cardinal; VectoredHandl
     Thread32Next: function(hSnapshot: HANDLE; var lpte: THREADENTRY32): BOOL; stdcall;
 
 var oldExceptionHandler: pointer=nil;
+    vehdebugactive: boolean;
 
 implementation
 
@@ -39,6 +40,8 @@ var ep: TEXCEPTIONPOINTERS;
     check: boolean;
     cpid: dword;
     isfirst: boolean;
+
+    bpc: TContext;
 begin
   //OutputDebugString('EmulateInitializeEvents');
   cpid:=GetCurrentProcessId;
@@ -46,6 +49,7 @@ begin
   ep.ExceptionRecord:=@er;
   er.NumberParameters:=0;
 
+  HandlerCS.Enter;
 
   ths:=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
   if ths<>INVALID_HANDLE_VALUE then
@@ -59,8 +63,6 @@ begin
     begin
       if lpte.th32OwnerProcessID=cpid then
       begin
-
-
         if isfirst then
         begin
           //create process
@@ -82,16 +84,22 @@ begin
     CloseHandle(ths);
   end;
 
-  if VEHSharedMem.ThreadWatchMethod=0 then
-    ThreadPoller:=TThreadPoller.create(false);
+  //if VEHSharedMem.ThreadWatchMethod=0 then
+  //  ThreadPoller:=TThreadPoller.create(false);
 
   //tell ce that the debugger has been attached
 //  ep.ContextRecord:=@VEHSharedMem.CurrentContext[0]; //just some memory properly aligned that can be used as scratchspace
 //  GetThreadContext(GetCurrentThread, ep.ContextRecord);
 
   er.ExceptionCode:=EXCEPTION_BREAKPOINT;
+  ep.ContextRecord:=@bpc;
+  zeromemory(@bpc,sizeof(bpc));
+  bpc.{$ifdef cpu64}rip{$else}eip{$endif}:=$ffffffce;
+
   Handler(@ep); //don't really cause a breakpoint (while I could just do a int3 myself I think it's safer to just emulate the event)
 
+
+  HandlerCS.Leave;
 end;
 
 procedure InitializeVEH;
@@ -115,13 +123,13 @@ begin
   OutputDebugString('VEHDebug init');
 
 
-  if ThreadPoller<>nil then
+  {if ThreadPoller<>nil then
   begin
     ThreadPoller.Terminate;
     ThreadPoller.WaitFor;
     ThreadPoller.free;
     ThreadPoller:=nil;
-  end;
+  end;  }
 
   testandfixcs_final;
 
@@ -153,6 +161,8 @@ begin
     exit;
   end;
 
+  VEHSharedMem.VEHVersion:=$cece0000+VEHVERSION;
+
 
   OutputDebugString(pchar('HasDebugEvent='+inttohex(VEHSharedMem.HasDebugEvent,8)));
   OutputDebugString(pchar('HasHandledDebugEvent='+inttohex(VEHSharedMem.HasHandledDebugEvent,8)));
@@ -163,8 +173,8 @@ begin
 
   if assigned(AddVectoredExceptionHandler) then
   begin
-    if oldExceptionHandler<>nil then
-      outputdebugstring('Old exception handler should have been deleted. If not, this will crash');
+    //if oldExceptionHandler<>nil then
+   //   outputdebugstring('Old exception handler should have been deleted. If not, this will crash');
 
 
     OutputDebugString('Testing if it handles normal debug events');
@@ -174,14 +184,25 @@ begin
 
     OutputDebugString('Calling EmulateInitializeEvents');
 
+    handlerlock:=GetCurrentThreadId;
     HandlerCS.enter; //do not handle any external exception while the threadlist is sent to ce
 
     OutputDebugString('Registering exception handler');
-    oldExceptionHandler:=AddVectoredExceptionHandler(1,@Handler);
+    vehdebugactive:=true;
+    if oldExceptionHandler=nil then
+      oldExceptionHandler:=AddVectoredExceptionHandler(1,@Handler);
+
+    if oldExceptionHandler=nil then
+    begin
+      vehdebugactive:=false;
+      HandlerCS.leave;
+      exit;
+    end;
 
     EmulateInitializeEvents;
 
     HandlerCS.leave;
+    handlerlock:=0;
 
 
     OutputDebugString('returned from EmulateInitializeEvents');
@@ -200,6 +221,8 @@ end;
 
 procedure UnloadVEH;
 begin
+  vehdebugactive:=false;
+  {
   if assigned(RemoveVectoredExceptionHandler) then
   begin
     if oldExceptionHandler<>nil then
@@ -208,6 +231,7 @@ begin
       oldExceptionHandler:=nil;
     end;
   end;
+  }
 end;
 
 end.
